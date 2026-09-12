@@ -116,7 +116,8 @@
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new Blob([bytes], { type: 'audio/mpeg' });
   }
-  async function fetchWorker(server, text, voice, rate, timeoutMs = 8000) {
+  let serverIndex = 0;
+  async function fetchWorker(server, text, voice, rate, timeoutMs = 3500) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -136,16 +137,21 @@
       return b64 ? b64ToBlob(b64) : null;
     } catch (e) { clearTimeout(timer); return null; }
   }
-  // Số server race song song cho chunk đầu tiên (chunk 0) — ưu tiên tốc độ
-  const CHUNK0_RACE_SERVERS = 2;
 
-  async function raceWorkers(text, voice, rate, raceCount = 1) {
-    const pool = [...SERVERS];
+  async function raceWorkers(text, voice, rate, raceCount = 4) {
+    const pool = [];
+    for (let k = 0; k < SERVERS.length; k++) {
+      pool.push(SERVERS[(serverIndex + k) % SERVERS.length]);
+    }
     while (pool.length) {
       const batch = pool.splice(0, raceCount);
-      const results = await Promise.all(batch.map(s => fetchWorker(s, text, voice, rate)));
-      const hit = results.find(r => r);
-      if (hit) return hit;
+      const results = await Promise.all(batch.map(s => fetchWorker(s, text, voice, rate, 3500)));
+      for (let idx = 0; idx < results.length; idx++) {
+        if (results[idx]) {
+          serverIndex = (serverIndex + idx) % SERVERS.length;
+          return results[idx];
+        }
+      }
     }
     return null;
   }
@@ -963,7 +969,7 @@
       state.cache.set(i, p);
       return p;
     }
-    const p = synthesize(speechText, state.voice, SYNTH_RATE, raceCount);
+    const p = synthesize(speechText, state.voice, SYNTH_RATE, 4);
     // Nếu tổng hợp thất bại (null), không lưu cache — để lần đọc lại
     // (bấm quay lại đoạn này, hoặc auto-next) có cơ hội thử lại thay vì
     // luôn luôn lỗi vĩnh viễn cho đoạn đó.
@@ -1411,9 +1417,19 @@
       state.speed = mult;
       ui.speedBtns.forEach(b => b.classList.toggle('on', parseFloat(b.dataset.mult) === mult));
       localStorage.setItem('tts_speed', mult);
-      // Chỉ đổi tốc độ phát lại của audio đã fetch (playbackRate) — liền mạch,
-      // không fetch lại, không mất cache/prefetch đã có.
-      if (state.audioEl) state.audioEl.playbackRate = mult;
+      if (state.audioEl) {
+        try {
+          state.audioEl.defaultPlaybackRate = mult;
+          state.audioEl.playbackRate = mult;
+        } catch (_) {}
+      }
+      if (state.nextAudioEl) {
+        try {
+          state.nextAudioEl.defaultPlaybackRate = mult;
+          state.nextAudioEl.playbackRate = mult;
+        } catch (_) {}
+      }
+      updatePositionState();
     }
     ui.speedBtns.forEach(btn => btn.addEventListener('click', () => setSpeed(parseFloat(btn.dataset.mult))));
 
@@ -1872,7 +1888,10 @@
       }
       const nextAudio = new Audio(URL.createObjectURL(blob));
       nextAudio.volume = state.volume;
-      nextAudio.playbackRate = state.speed;
+      try {
+        nextAudio.defaultPlaybackRate = state.speed;
+        nextAudio.playbackRate = state.speed;
+      } catch (_) {}
       nextAudio.preload = 'auto';
       nextAudio.load();
       nextAudio.onerror = () => {
@@ -2006,7 +2025,10 @@
       }
       audio = new Audio(URL.createObjectURL(blob));
       audio.volume = state.volume;
-      audio.playbackRate = state.speed;
+      try {
+        audio.defaultPlaybackRate = state.speed;
+        audio.playbackRate = state.speed;
+      } catch (_) {}
     }
 
     state.consecutiveFailures = 0;
@@ -2061,7 +2083,18 @@
     };
 
     if (!isSeamless || audio.paused) {
-      audio.play().catch(() => {});
+      try {
+        audio.defaultPlaybackRate = state.speed;
+        audio.playbackRate = state.speed;
+      } catch (_) {}
+      const p = audio.play();
+      if (p && p.then) {
+        p.then(() => {
+          try { audio.playbackRate = state.speed; } catch (_) {}
+        }).catch(() => {});
+      }
+    } else {
+      try { audio.playbackRate = state.speed; } catch (_) {}
     }
 
     state.playing = true;
