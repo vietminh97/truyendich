@@ -417,8 +417,8 @@
   // ─── Chia văn bản thành từng chunk ──────────────────────
   // Mặc định: mỗi chunk gồm 2 câu (SENTENCES_PER_CHUNK). Nếu chunk ghép được
   // vẫn ngắn hơn MIN_CHUNK_CHARS ký tự thì gộp thêm câu kế tiếp cho đủ độ dài
-  const SENTENCES_PER_CHUNK = 2;
-  const MIN_CHUNK_CHARS = 25;
+  const SENTENCES_PER_CHUNK = 6;
+  const MIN_CHUNK_CHARS = 100;
   // Đánh dấu 1 chunk KHÔNG có nội dung để đọc sau khi đã dọn ký tự đặc biệt
   // (VD: dòng phân cảnh chỉ toàn "***", "____", "———"...) — dùng để phân biệt
   // với trường hợp tổng hợp giọng đọc thật sự lỗi (blob null). Xem getChunkBlob().
@@ -894,6 +894,9 @@
     // về 0 mỗi khi có 1 chunk tổng hợp thành công, hoặc mỗi lần bắt đầu
     // phiên đọc mới (startReading/startReadingBackground/stopReading).
     consecutiveFailures: 0,
+    fullChapterBlob: null,
+    isFullChapterPlaying: false,
+    fullChapterAudioReady: false,
   };
 
   // ─── Nhạc nền (archive.org) ────────────────────────────────────────────
@@ -1871,6 +1874,38 @@
     return state.audioEl;
   }
 
+  async function tryMergeFullChapterAudio(myToken) {
+    if (state.fullChapterAudioReady || state.token !== myToken) return;
+    if (!state.chunks || state.chunks.length <= 1) return;
+
+    for (let k = 0; k < state.chunks.length; k++) {
+      if (!state.cache.has(k)) return;
+    }
+
+    try {
+      const promises = [];
+      for (let k = 0; k < state.chunks.length; k++) {
+        promises.push(state.cache.get(k));
+      }
+      const blobs = await Promise.all(promises);
+      if (state.token !== myToken) return;
+
+      const validBlobs = [];
+      for (let k = 0; k < blobs.length; k++) {
+        const b = blobs[k];
+        if (b && b !== EMPTY_CHUNK) {
+          validBlobs.push(b);
+        }
+      }
+
+      if (!validBlobs.length) return;
+
+      const mergedBlob = new Blob(validBlobs, { type: 'audio/mpeg' });
+      state.fullChapterBlob = mergedBlob;
+      state.fullChapterAudioReady = true;
+    } catch (_) {}
+  }
+
   function prefetchFullChapter(startIndex = 0, myToken) {
     if (!state.chunks || !state.chunks.length) return;
     const len = state.chunks.length;
@@ -1879,7 +1914,11 @@
       if (!state.cache.has(idx)) {
         prefetch(idx);
       }
-      setTimeout(() => fetchNextBatch(idx + 1), 60);
+      if (idx === len - 1) {
+        setTimeout(() => tryMergeFullChapterAudio(myToken), 200);
+      } else {
+        setTimeout(() => fetchNextBatch(idx + 1), 50);
+      }
     };
     fetchNextBatch(startIndex);
   }
@@ -2424,6 +2463,9 @@
       silenceAudio(state.audioEl);
       try { URL.revokeObjectURL(prevSrc); } catch (_) {}
     }
+    state.fullChapterBlob = null;
+    state.isFullChapterPlaying = false;
+    state.fullChapterAudioReady = false;
     state.audioEl = null; state.playing = false; state.idx = -1; state.chunks = []; state.cache.clear();
     state.nextChap = null;
     state.chapterDetached = false;
