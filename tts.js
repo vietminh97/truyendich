@@ -45,8 +45,7 @@
   // chương trong im lặng (không có tiếng đọc), chỉ thấy highlight/tiến độ
   // vẫn chạy và thậm chí tự nhảy sang chương sau.
   const MAX_CONSECUTIVE_SYNTH_FAILURES = 2;
-  // Rate tổng hợp giọng đọc luôn giữ cố định ở mức bình thường — chỉ đổi tốc
-  // độ NGHE bằng playbackRate, không đổi tốc độ SINH giọng.
+  const CHUNK0_RACE_SERVERS = 4;
   const SYNTH_RATE = '+0%';
 
   // ─── Icon SVG ─────────────────────────────
@@ -952,33 +951,77 @@
     return el ? el.innerText.trim() : '';
   }
 
+  const PREFETCH_CONCURRENCY = 2;
+  let activePrefetches = 0;
+  const prefetchQueue = [];
+
+  function processPrefetchQueue() {
+    if (!prefetchQueue.length || activePrefetches >= PREFETCH_CONCURRENCY) return;
+    const idx = prefetchQueue.shift();
+    if (idx < 0 || !state.chunks || idx >= state.chunks.length || state.cache.has(idx)) {
+      processPrefetchQueue();
+      return;
+    }
+
+    activePrefetches++;
+    const p = getChunkBlob(idx);
+    p.finally(() => {
+      activePrefetches--;
+      processPrefetchQueue();
+    });
+
+    processPrefetchQueue();
+  }
+
+  function prefetch(i) {
+    if (i >= 0 && state.chunks && i < state.chunks.length && !state.cache.has(i)) {
+      if (!prefetchQueue.includes(i)) {
+        prefetchQueue.push(i);
+        processPrefetchQueue();
+      }
+    }
+  }
+
+  function prefetchWindow(currentIndex) {
+    if (!state.chunks) return;
+    const depth = prefetchDepthForVoice(state.voice);
+    for (let k = 1; k <= depth; k++) {
+      const targetIdx = currentIndex + k;
+      if (targetIdx < state.chunks.length) {
+        prefetch(targetIdx);
+      }
+    }
+  }
+
+  function clearPrefetchQueue() {
+    prefetchQueue.length = 0;
+    activePrefetches = 0;
+  }
+
+  async function synthesizeWithRetry(text, voice, rate, raceCount = 4, maxRetries = 2) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const blob = await synthesize(text, voice, rate, raceCount);
+      if (blob) return blob;
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+    return null;
+  }
+
   function getChunkBlob(i) {
     if (state.cache.has(i)) return state.cache.get(i);
-    const raceCount = i === 0 ? CHUNK0_RACE_SERVERS : 1;
-    // Chuyển số/đơn vị/giờ/ngày... sang chữ tiếng Việt trước khi tổng hợp
-    // giọng đọc (không đụng tới state.chunks[i] gốc — text hiển thị trên UI
-    // vẫn giữ nguyên dạng số như trong bài, chỉ audio được đọc thành chữ).
+    const raceCount = i === 0 ? CHUNK0_RACE_SERVERS : 4;
     const speechText = sanitizeText(preprocessNumbersForTTS(state.chunks[i]));
-    // Sau khi dọn ký tự đặc biệt (markdown, dấu trang trí...), có những chunk
-    // (VD: dòng phân cảnh chỉ toàn "***") không còn nội dung để đọc. Trước đây
-    // vẫn gọi TTS cho chuỗi rỗng này, đợi API trả lỗi rồi mới bỏ qua — tốn 1
-    // lượt gọi mạng vô ích + hiện nhầm thông báo "Lỗi tổng hợp" dù không có lỗi
-    // gì thật sự. Giờ phát hiện rỗng ngay tại đây, bỏ qua thẳng không gọi TTS.
     if (!speechText.trim()) {
       const p = Promise.resolve(EMPTY_CHUNK);
       state.cache.set(i, p);
       return p;
     }
-    const p = synthesize(speechText, state.voice, SYNTH_RATE, 4);
-    // Nếu tổng hợp thất bại (null), không lưu cache — để lần đọc lại
-    // (bấm quay lại đoạn này, hoặc auto-next) có cơ hội thử lại thay vì
-    // luôn luôn lỗi vĩnh viễn cho đoạn đó.
+    const p = synthesizeWithRetry(speechText, state.voice, SYNTH_RATE, raceCount, 2);
     p.then(blob => { if (!blob) state.cache.delete(i); });
     state.cache.set(i, p);
     return p;
-  }
-  function prefetch(i) {
-    if (i >= 0 && i < state.chunks.length && !state.cache.has(i)) getChunkBlob(i);
   }
 
   // Sinh HTML cho cụm nút tốc độ từ 1 bộ mốc (SPEED_STEPS hoặc SPEED_STEPS_ALT),
@@ -1907,20 +1950,8 @@
   }
 
   function prefetchFullChapter(startIndex = 0, myToken) {
-    if (!state.chunks || !state.chunks.length) return;
-    const len = state.chunks.length;
-    const fetchNextBatch = (idx) => {
-      if (idx >= len || state.token !== myToken) return;
-      if (!state.cache.has(idx)) {
-        prefetch(idx);
-      }
-      if (idx === len - 1) {
-        setTimeout(() => tryMergeFullChapterAudio(myToken), 200);
-      } else {
-        setTimeout(() => fetchNextBatch(idx + 1), 50);
-      }
-    };
-    fetchNextBatch(startIndex);
+    if (!state.chunks || !state.chunks.length || state.token !== myToken) return;
+    prefetchWindow(startIndex);
   }
 
   function playNextChapter() {
@@ -2028,6 +2059,7 @@
     audio.onended = null;
     audio.onerror = null;
     audio.ontimeupdate = null;
+    audio.onloadedmetadata = null;
 
     const blobUrl = URL.createObjectURL(blob);
     audio.src = blobUrl;
@@ -2036,6 +2068,12 @@
       audio.defaultPlaybackRate = state.speed;
       audio.playbackRate = state.speed;
     } catch (_) {}
+
+    audio.onloadedmetadata = () => {
+      try {
+        audio.playbackRate = state.speed;
+      } catch (_) {}
+    };
 
     if ('mediaSession' in navigator) {
       try {
@@ -2073,7 +2111,15 @@
         }
       }).catch((err) => {
         console.warn('Audio play error:', err);
-        if (myToken === state.token) playChunk(i + 1);
+        if (myToken === state.token) {
+          if (err && err.name === 'NotAllowedError') {
+            state.playing = false;
+            setUIState('paused');
+            setStatus('Tạm dừng (Bấm nút Phát để tiếp tục nghe).');
+          } else {
+            playChunk(i + 1);
+          }
+        }
       });
     }
 
@@ -2081,7 +2127,7 @@
     setUIState('playing');
     syncBgmWithTts();
 
-    prefetchFullChapter(i + 1, myToken);
+    prefetchWindow(i);
 
     if (state.autoNext && state.fullChapter && i === Math.max(0, state.chunks.length - 3)) {
       prepareNextChapter();
@@ -2421,6 +2467,7 @@
 
   function startReading(text, fullChapter = true) {
     state.token++;
+    clearPrefetchQueue();
     state.cache.clear();
     state.nextChap = null;
     state.fullChapter = fullChapter;
@@ -2446,6 +2493,7 @@
   //     với chương thực sự bắt đầu phát ở đây.
   function startReadingBackground(text) {
     state.token++;
+    clearPrefetchQueue();
     state.cache.clear();
     state.nextChap = null;
     state.fullChapter = true;
@@ -2458,6 +2506,7 @@
 
   function stopReading(msg) {
     state.token++;
+    clearPrefetchQueue();
     if (state.audioEl) {
       const prevSrc = state.audioEl.src;
       silenceAudio(state.audioEl);
