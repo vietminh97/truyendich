@@ -894,9 +894,6 @@
     // về 0 mỗi khi có 1 chunk tổng hợp thành công, hoặc mỗi lần bắt đầu
     // phiên đọc mới (startReading/startReadingBackground/stopReading).
     consecutiveFailures: 0,
-    nextAudioEl: null,
-    nextChunkIdx: -1,
-    preloadingNext: false,
   };
 
   // ─── Nhạc nền (archive.org) ────────────────────────────────────────────
@@ -1423,12 +1420,6 @@
           state.audioEl.playbackRate = mult;
         } catch (_) {}
       }
-      if (state.nextAudioEl) {
-        try {
-          state.nextAudioEl.defaultPlaybackRate = mult;
-          state.nextAudioEl.playbackRate = mult;
-        } catch (_) {}
-      }
       updatePositionState();
     }
     ui.speedBtns.forEach(btn => btn.addEventListener('click', () => setSpeed(parseFloat(btn.dataset.mult))));
@@ -1872,42 +1863,12 @@
     } catch (_) { /* im lặng bỏ qua nếu không định vị được */ }
   }
 
-  // ─── Seamless Audio Pipeline & MediaSession Helpers ───────────────────────
-  async function preloadNextChunkAudio(nextIdx, myToken) {
-    if (nextIdx < 0 || nextIdx >= state.chunks.length) return;
-    if (state.token !== myToken) return;
-    if (state.nextChunkIdx === nextIdx && state.nextAudioEl) return;
-    state.preloadingNext = true;
-    try {
-      const blob = await getChunkBlob(nextIdx);
-      if (state.token !== myToken) return;
-      if (!blob || blob === EMPTY_CHUNK) {
-        state.nextAudioEl = null;
-        state.nextChunkIdx = -1;
-        return;
-      }
-      const nextAudio = new Audio(URL.createObjectURL(blob));
-      nextAudio.volume = state.volume;
-      try {
-        nextAudio.defaultPlaybackRate = state.speed;
-        nextAudio.playbackRate = state.speed;
-      } catch (_) {}
-      nextAudio.preload = 'auto';
-      nextAudio.load();
-      nextAudio.onerror = () => {
-        if (state.nextAudioEl === nextAudio) {
-          state.nextAudioEl = null;
-          state.nextChunkIdx = -1;
-        }
-      };
-      state.nextAudioEl = nextAudio;
-      state.nextChunkIdx = nextIdx;
-    } catch (_) {
-      state.nextAudioEl = null;
-      state.nextChunkIdx = -1;
-    } finally {
-      state.preloadingNext = false;
+  // ─── Single Reusable Audio Element & MediaSession Helpers ─────────────────
+  function getAudioElement() {
+    if (!state.audioEl) {
+      state.audioEl = new Audio();
     }
+    return state.audioEl;
   }
 
   function prefetchFullChapter(startIndex = 0, myToken) {
@@ -2000,48 +1961,42 @@
     const myToken = state.token;
     setUIState('loading');
 
-    let audio = null;
-    let isSeamless = false;
+    const blob = await getChunkBlob(i);
+    if (myToken !== state.token) return;
 
-    // Kỹ thuật Seamless Playback: Tận dụng audio đối tượng kế tiếp đã được nạp sẵn
-    if (state.nextAudioEl && state.nextChunkIdx === i) {
-      audio = state.nextAudioEl;
-      state.nextAudioEl = null;
-      state.nextChunkIdx = -1;
-      isSeamless = true;
-    } else {
-      const blob = await getChunkBlob(i);
-      if (myToken !== state.token) return;
-      if (blob === EMPTY_CHUNK) return playChunk(i + 1);
-      if (!blob) {
-        state.consecutiveFailures++;
-        if (state.consecutiveFailures >= MAX_CONSECUTIVE_SYNTH_FAILURES
-            || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
-          stopReading('Mất kết nối mạng (hoặc lỗi tổng hợp giọng đọc liên tục), đã dừng đọc.');
-          return;
-        }
-        setStatus('Lỗi tổng hợp giọng đọc, bỏ qua đoạn này…');
-        return playChunk(i + 1);
+    if (blob === EMPTY_CHUNK) return playChunk(i + 1);
+    if (!blob) {
+      state.consecutiveFailures++;
+      if (state.consecutiveFailures >= MAX_CONSECUTIVE_SYNTH_FAILURES
+          || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+        stopReading('Mất kết nối mạng (hoặc lỗi tổng hợp giọng đọc liên tục), đã dừng đọc.');
+        return;
       }
-      audio = new Audio(URL.createObjectURL(blob));
-      audio.volume = state.volume;
-      try {
-        audio.defaultPlaybackRate = state.speed;
-        audio.playbackRate = state.speed;
-      } catch (_) {}
+      setStatus('Lỗi tổng hợp giọng đọc, bỏ qua đoạn này…');
+      return playChunk(i + 1);
     }
 
     state.consecutiveFailures = 0;
     saveResumePoint();
 
-    if (state.audioEl && state.audioEl !== audio) {
-      const prevAudio = state.audioEl;
-      const prevSrc = prevAudio.src;
-      silenceAudio(prevAudio);
-      try { URL.revokeObjectURL(prevSrc); } catch (_) {}
+    // Re-use single Audio element to bypass mobile browser autoplay blocks
+    const audio = getAudioElement();
+
+    if (audio.src && audio.src.startsWith('blob:')) {
+      try { URL.revokeObjectURL(audio.src); } catch (_) {}
     }
 
-    state.audioEl = audio;
+    audio.onended = null;
+    audio.onerror = null;
+    audio.ontimeupdate = null;
+
+    const blobUrl = URL.createObjectURL(blob);
+    audio.src = blobUrl;
+    audio.volume = state.volume;
+    try {
+      audio.defaultPlaybackRate = state.speed;
+      audio.playbackRate = state.speed;
+    } catch (_) {}
 
     if ('mediaSession' in navigator) {
       try {
@@ -2054,57 +2009,39 @@
       } catch (_) {}
     }
 
-    let isHandedOver = false;
-
     audio.ontimeupdate = () => {
       if (myToken !== state.token) return;
       updatePositionState();
-
-      // Handover chuyển tiếp 0ms liền mạch khi audio hiện tại sắp kết thúc (còn <= 0.15s)
-      const rem = audio.duration - audio.currentTime;
-      if (!isHandedOver && !isNaN(rem) && rem > 0 && rem <= 0.15) {
-        if (state.nextAudioEl && state.nextChunkIdx === i + 1) {
-          isHandedOver = true;
-          playChunk(i + 1);
-        }
-      }
     };
 
     audio.onended = () => {
-      if (myToken === state.token && !isHandedOver) {
+      if (myToken === state.token) {
         playChunk(i + 1);
       }
     };
 
     audio.onerror = () => {
-      if (myToken === state.token && !isHandedOver) {
+      if (myToken === state.token) {
         playChunk(i + 1);
       }
     };
 
-    if (!isSeamless || audio.paused) {
-      try {
-        audio.defaultPlaybackRate = state.speed;
-        audio.playbackRate = state.speed;
-      } catch (_) {}
-      const p = audio.play();
-      if (p && p.then) {
-        p.then(() => {
+    const playPromise = audio.play();
+    if (playPromise && playPromise.catch) {
+      playPromise.then(() => {
+        if (myToken === state.token) {
           try { audio.playbackRate = state.speed; } catch (_) {}
-        }).catch(() => {});
-      }
-    } else {
-      try { audio.playbackRate = state.speed; } catch (_) {}
+        }
+      }).catch((err) => {
+        console.warn('Audio play error:', err);
+        if (myToken === state.token) playChunk(i + 1);
+      });
     }
 
     state.playing = true;
     setUIState('playing');
     syncBgmWithTts();
 
-    // Nạp sẵn audio cho đoạn kế tiếp (Preload)
-    preloadNextChunkAudio(i + 1, myToken);
-
-    // Tải ngầm toàn bộ chương
     prefetchFullChapter(i + 1, myToken);
 
     if (state.autoNext && state.fullChapter && i === Math.max(0, state.chunks.length - 3)) {
