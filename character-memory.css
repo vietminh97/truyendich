@@ -1,0 +1,133 @@
+/* ===== CHARACTER MEMORY - CSS */
+/* CHARACTER MEMORY DRAWER */
+/* position:absolute (không phải fixed): neo theo .layout (index.html đã đặt
+   position:relative cho .layout) — luôn bắt đầu ngay dưới header THẬT SỰ
+   đang hiển thị, kể cả khi header ẩn lúc cuộn, không cần đoán cứng số px. */
+.charmem-overlay{position:absolute;top:0;right:0;bottom:0;left:0;z-index:290;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.charmem-overlay.show{opacity:1;pointer-events:all;}
+.charmem-drawer{
+  position:absolute;top:0;right:0;bottom:0;width:300px;max-width:88vw;z-index:300;
+  background:var(--sidebar-bg);border-left:1px solid var(--sidebar-border);
+  display:flex;flex-direction:column;overflow:hidden;
+  transform:translateX(100%);transition:transform .25s ease;
+}
+.charmem-drawer.open{transform:translateX(0);}
+.charmem-hdr{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid var(--sidebar-border);}
+.charmem-hdr-title{font-size:14.5px;font-weight:700;letter-spacing:-.2px;color:var(--text);}
+.charmem-hdr-beta{font-size:11px;font-weight:500;font-style:italic;color:var(--text3);margin-left:5px;}
+.charmem-hdr-btns{display:flex;gap:6px;}
+.charmem-icon-btn{width:30px;height:30px;border-radius:var(--r-sm);border:1px solid var(--border2);background:var(--btn-bg);color:var(--text3);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;}
+.charmem-icon-btn:hover{background:var(--btn-hover);}
+.charmem-icon-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.charmem-toggle-text{width:auto;padding:0 12px;font-size:12.5px;font-weight:600;white-space:nowrap;}
+.charmem-switch{
+  position:relative;width:32px;height:18px;border-radius:20px;border:none;
+  background:var(--border2);cursor:pointer;flex-shrink:0;transition:background .18s ease;padding:0;
+}
+.charmem-switch-knob{
+  position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .18s ease;
+}
+.charmem-switch.on{background:var(--accent);}
+.charmem-switch.on .charmem-switch-knob{transform:translateX(14px);}
+.charmem-search-row{
+  flex-shrink:0;display:flex;align-items:center;gap:7px;padding:9px 14px;color:var(--text3);
+  border-bottom:1px solid var(--sidebar-border);
+}
+.charmem-search-row input{flex:1;border:none;background:transparent;color:var(--text);font-size:13px;outline:none;}
+.charmem-list{flex:1;overflow-y:auto;padding:10px 10px 16px;}
+.charmem-empty{color:var(--text3);font-size:12.5px;text-align:center;padding:30px 10px;line-height:1.6;}
+.char-item{
+  position:relative;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg2);
+  padding:9px 11px;margin-bottom:7px;transition:background .15s,border-color .15s,box-shadow .15s,transform .15s;
+}
+.char-item:hover{background:var(--ch-hover);}
+@media (hover:hover){
+  .char-item:hover{border-color:var(--border2);box-shadow:var(--shadow-sm);transform:translateY(-1px);}
+}
+.char-item-top{display:flex;align-items:center;gap:5px;}
+.char-item-name{flex:1;font-size:13.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:5px;}
+.char-item-name svg{flex-shrink:0;color:var(--accent);}
+.char-protagonist-star{display:inline-flex;align-items:center;flex-shrink:0;cursor:pointer;border-radius:4px;padding:2px;margin:-2px;transition:background .15s,transform .1s;}
+.char-protagonist-star:hover{background:var(--btn-hover);}
+.char-protagonist-star:active{transform:scale(.85);}
+.char-item-meta{font-size:12px;color:var(--text3);margin-top:3px;}
+.char-item-note{font-size:11.5px;color:var(--text3);opacity:.85;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.char-item-actions{position:relative;display:flex;align-items:center;gap:2px;flex-shrink:0;}
+.char-act-btn{width:24px;height:24px;border:none;background:transparent;color:var(--text3);cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:5px;opacity:0;transition:opacity .15s,background .15s,color .15s;}
+.char-item:hover .char-act-btn{opacity:1;}
+@media (hover:none){.char-act-btn{opacity:1;}}
+.char-act-btn:hover{background:var(--btn-hover);color:var(--text);}
+.char-act-btn.delete:hover{color:var(--accent);}
+.char-item.has-conflict{border-color:#e0a020;}
+.char-conflict-dot{
+  flex-shrink:0;width:15px;height:15px;border-radius:50%;background:#e0a020;color:#fff;
+  font-size:11px;font-weight:800;line-height:15px;text-align:center;cursor:default;
+}
+/* Cảnh báo tên nhân vật còn sót chữ Hán/Trung Quốc chưa dịch (xem needsTranslation trong
+   buildCharExtractPrompt, character-memory.js) — màu đỏ để phân biệt rõ với cảnh báo mâu thuẫn
+   dữ liệu (màu vàng cam, .has-conflict) ở trên. */
+.char-untranslated-dot{
+  flex-shrink:0;width:auto;min-width:15px;height:15px;border-radius:7px;background:#d8524a;color:#fff;
+  font-size:10px;font-weight:700;line-height:15px;text-align:center;cursor:default;padding:0 4px;
+}
+
+/* CHARACTER EDIT MODAL */
+/* z-index:905 (thấp hơn #popupOverlay/#apiGuideOverlay ở 910) — để popup xác nhận
+   "Gộp nhân vật?" (showPopup, mở TỪ BÊN TRONG modal này) luôn nổi lên trên, không bị
+   modal thông tin nhân vật che mất. Vẫn cao hơn .spanel (900) nên không bị Settings che. */
+.charmodal-overlay{position:fixed;inset:0;z-index:905;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .2s ease;display:flex;align-items:center;justify-content:center;}
+.charmodal-overlay.show{opacity:1;pointer-events:all;}
+.charmodal-box{width:550px;max-width:92vw;max-height:88vh;overflow:hidden;background:var(--settings-bg);border-radius:var(--r-lg);padding:0;transform:translateY(8px);transition:transform .2s ease;display:flex;flex-direction:column;}
+.charmodal-top-bar{height:4px;background:var(--accent);flex-shrink:0;}
+/* flex:1+min-height:0: để .charmodal-inner co lại đúng phần không gian còn lại trong .charmodal-box
+   (flex column) và TỰ CÓ thanh cuộn riêng — không lấn xuống phần .charmodal-btns nữa (nút được JS
+   chuyển ra làm anh em ngoài vùng cuộn này, xem ensureCharModalBtnsFixed trong character-memory.js) */
+.charmodal-inner{padding:28px 28px 24px;overflow-y:auto;flex:1;min-height:0;}
+.charmodal-overlay.show .charmodal-box{transform:translateY(0);}
+.charmodal-title{font-size:19px;font-weight:700;letter-spacing:-.3px;margin-bottom:24px;color:var(--text);}
+.charmodal-fg{margin-bottom:18px;display:flex;flex-direction:column;gap:8px;width:100%;box-sizing:border-box;}
+.charmodal-fg label{font-size:12px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;}
+.charmodal-fg input,.charmodal-fg textarea{
+  width:100%;box-sizing:border-box;
+  border:1px solid var(--border);border-radius:var(--r-sm);background:var(--input-bg);color:var(--text);
+  padding:11px 14px;font-size:14.5px;font-family:inherit;outline:none;resize:vertical;height:38px;
+  transition:border-color .15s,box-shadow .15s;
+}
+.charmodal-fg textarea{height:auto;min-height:64px;max-height:160px;overflow-y:auto;resize:none;line-height:1.5;padding:11px 22px 11px 14px;}
+.charmodal-ta-wrap{position:relative;width:100%;box-sizing:border-box;}
+.charmodal-fg input:focus,.charmodal-fg textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.14);}
+.charmodal-gender-row{display:flex;gap:8px;height:44px;}
+.charmodal-chip{flex:1;height:38px;padding:0 6px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:transparent;color:var(--text2);font-size:13.5px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.charmodal-chip:hover{background:var(--btn-hover);}
+.charmodal-chip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.charmodal-row2{display:grid;grid-template-columns:1fr 1.35fr;gap:16px;}
+.charmodal-row2-namegender{grid-template-columns:1.3fr 1fr;}
+.charmodal-row2-eq{grid-template-columns:1fr 1fr;}
+.charmodal-row2-eq .charmodal-fg label{line-height:1.3;}
+.charmodal-adv-toggle{display:flex;align-items:center;justify-content:space-between;padding:14px 2px;border-top:1px solid var(--border);cursor:pointer;color:var(--text3);font-size:13px;user-select:none;margin-top:6px;}
+.charmodal-adv-toggle:hover{color:var(--text);}
+.charmodal-adv-toggle.open svg{transform:rotate(180deg);}
+.charmodal-adv-body{display:none;padding-bottom:4px;}
+.charmodal-adv-body.open{display:block;}
+/* Được JS (ensureCharModalBtnsFixed) chuyển ra làm CON TRỰC TIẾP của .charmodal-box, đứng SAU
+   .charmodal-inner — tức nằm hẳn ngoài vùng cuộn nên thanh cuộn của .charmodal-inner không còn
+   chạy qua đây nữa, và nút luôn hiển thị cố định ở đáy modal bất kể nội dung phía trên dài bao nhiêu.
+   margin=0 (khác bản cũ dùng margin âm để bù padding của .charmodal-inner) vì giờ .charmodal-box
+   có padding:0 nên không cần bù trừ gì — chiều rộng full sẵn, góc dưới tự bị bo theo overflow:hidden
+   của .charmodal-box. */
+.charmodal-btns{display:flex;align-items:stretch;margin:0;padding:0;border-top:1px solid var(--border);flex-shrink:0;}
+.charmodal-btns .btn{flex:1;justify-content:center;border-radius:0;border:none;border-right:1px solid var(--border);padding:16px;font-size:14.5px;font-weight:600;}
+.charmodal-btns .btn:first-child{border-bottom-left-radius:9px;}
+.charmodal-btns .btn:last-child{border-right:none;border-bottom-right-radius:0;}
+
+/* CONFLICT BANNER — gợi ý sửa gender/relationship khi AI phát hiện mâu thuẫn với dữ liệu do user xác nhận */
+.charmem-conflict-banner{display:flex;flex-direction:column;gap:8px;margin-bottom:20px;}
+.charmem-conflict-item{
+  border:1px solid #e0a020;background:rgba(224,160,32,.1);border-radius:var(--r-md);padding:10px 12px;
+  display:flex;flex-direction:column;gap:8px;
+}
+.charmem-conflict-text{font-size:12.5px;line-height:1.5;color:var(--text);}
+.charmem-conflict-reason{color:var(--text3);}
+.charmem-conflict-btns{display:flex;gap:8px;}
+.charmem-conflict-btns .btn{padding:6px 12px;font-size:12.5px;border-radius:7px;}

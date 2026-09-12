@@ -1,0 +1,523 @@
+/* tts.css — Thanh đọc văn bản (TTS)
+   Thiết kế: mini-player nổi + popover cài đặt, dựng lại 1:1 theo file demo
+   audio-bar-v5 (nền kính mờ, accent #6366f1, bo tròn 20px). */
+
+:root{
+  --tts-bg2:rgba(20,22,32,.72); --tts-bg3:rgba(22,24,34,.94); --tts-bg4:rgba(255,255,255,.06);
+  --tts-bg-hov:rgba(255,255,255,.10);
+  --tts-bd:rgba(255,255,255,.10); --tts-bd2:rgba(255,255,255,.20);
+  --tts-txt:#eef0f7; --tts-txt2:#9aa0b8; --tts-txt3:#6b7191;
+  --tts-ac:#6366f1; --tts-ac2:#a5b4fc; --tts-ac-dim:rgba(99,102,241,.16);
+  --tts-ok:#4ade80; --tts-warn:#fbbf24; --tts-red:#f87171;
+  --tts-switch-track:rgba(255,255,255,.16);
+}
+
+/* Reset bọc trong :where() để specificity = 0 — nếu không, selector có ID
+   (#tts-root) sẽ có độ ưu tiên CAO HƠN các class thường phía dưới, khiến
+   margin/padding của từng nút bị đè về 0. */
+:where(#tts-root *, #tts-root *::before, #tts-root *::after) {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', system-ui, Arial, sans-serif !important;
+  line-height: 1;
+}
+
+/* ── #tts-root: chỉ còn là 1 lớp phủ định vị, thanh thật (.tts-bar) nổi ở
+   giữa, cách 2 lề trái/phải và đáy màn hình 1 khoảng — không còn dính sát
+   full-width như bản cũ. ── */
+#tts-root {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 800;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px 21px;
+  pointer-events: none; /* vùng đệm trong suốt không chặn click nội dung phía dưới */
+}
+#tts-root > * { pointer-events: auto; }
+
+.tts-bar-outer { position: relative; width: 100%; max-width: 770px; }
+
+.tts-bar {
+  position: relative;
+  background: var(--tts-bg2);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--tts-bd);
+  border-radius: 20px;
+  padding: 11px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 14px 34px rgba(0,0,0,.4);
+  overflow: hidden; /* để .tts-prog bị cắt khít theo đúng góc bo tròn của thanh, thay vì nổi thành viên "thuốc" lơ lửng */
+}
+
+/* thanh tiến trình đoạn văn bản hiện tại — dải mỏng khít sát mép trên, được
+   .tts-bar (overflow:hidden) cắt theo đúng góc bo tròn nên không cần tự bo
+   góc/inset riêng nữa. */
+.tts-prog {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: transparent;
+}
+.tts-prog-fill { height: 100%; width: 0%; background: var(--tts-ac); transition: width .4s; }
+
+/* ── hàng nhỏ "Đang phát Chương N: ..." — mở rộng LÊN TRÊN thanh chính (đặt
+   trước .tts-bar trong DOM nên xếp phía trên nó theo luồng bình thường),
+   chỉ hiện khi người dùng đã rời khỏi chương đang phát (chapterDetached),
+   xem updateDetachedRow() trong tts.js. Bấm vào để quay lại đúng chương
+   đang phát. Cao 28px khi hiện (.show), co về 0 khi ẩn — xem animation bên
+   dưới. Nền/kính mờ giống thanh chính nhưng nhạt hơn 1 chút để phân biệt là
+   phần phụ, không phải điều khiển chính. */
+.tts-detached-row {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 0 14px;
+  /* Nền kính mờ giống hệt audio bar (.tts-bar dùng --tts-bg2) thay vì nền
+     gần như đục hoàn toàn (--tts-bg3) như trước — để thấy rõ hiệu ứng blur
+     phía sau giống thanh chính. */
+  background: var(--tts-bg2);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--tts-ac2);
+  box-shadow: 0 8px 20px rgba(0,0,0,0);
+  overflow: hidden;
+  /* Trạng thái ẩn mặc định: cao 0, mờ dần, hơi trượt xuống + thu nhỏ — khi
+     hiện (.show) sẽ "nở" lên và trượt vào đúng vị trí, thay vì bật/tắt đột
+     ngột bằng display:none. ResizeObserver trên .tts-bar-outer (tts.js)
+     tự bắt kịp chiều cao thay đổi trong lúc animate nên --tts-bar-h vẫn
+     luôn khớp mượt theo animation, không bị giật. */
+  height: 0; margin-bottom: 0; opacity: 0;
+  transform: translateY(10px) scale(.94);
+  pointer-events: none;
+  transition:
+    height .32s cubic-bezier(.34,1.3,.4,1),
+    margin-bottom .32s cubic-bezier(.34,1.3,.4,1),
+    opacity .22s ease,
+    transform .32s cubic-bezier(.34,1.3,.4,1),
+    border-color .32s ease,
+    box-shadow .32s ease,
+    background .15s, color .15s;
+}
+.tts-detached-row.show {
+  height: 28px; margin-bottom: 6px; opacity: 1;
+  transform: translateY(0) scale(1);
+  border-color: var(--tts-bd);
+  box-shadow: 0 8px 20px rgba(0,0,0,.32);
+  pointer-events: auto;
+}
+/* Hover nhạt như nút tốc độ (.tts-spd:hover) thay vì sáng hẳn lên — phủ thêm
+   1 lớp trắng rất nhạt (.06) LÊN TRÊN nền kính mờ gốc (--tts-bg2), chứ
+   không thay hẳn bằng nền sáng như trước, để vẫn giữ đúng cảm giác blur
+   giống audio bar. */
+.tts-detached-row:hover {
+  background: linear-gradient(rgba(255,255,255,.06), rgba(255,255,255,.06)), var(--tts-bg2);
+  color: var(--tts-txt);
+}
+.tts-detached-ico { display: flex; align-items: center; flex-shrink: 0; color: var(--tts-ac); animation: tts-dot-pulse 1.4s ease-in-out infinite; }
+.tts-detached-ico svg { width: 12px; height: 12px; display: block; }
+.tts-detached-label {
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+
+/* ── cụm play / prev / next ── */
+.tts-transport { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.tts-tbtn {
+  all: unset; cursor: pointer; box-sizing: border-box;
+  width: 32px; height: 32px; border-radius: 50%;
+  color: var(--tts-txt2); display: flex; align-items: center; justify-content: center;
+  transition: color .15s, background .15s;
+}
+.tts-tbtn svg { display: block; flex-shrink: 0; }
+.tts-tbtn:hover:not(:disabled) { color: var(--tts-txt); background: rgba(255,255,255,.06); }
+.tts-tbtn:disabled { opacity: .3; cursor: default; }
+.tts-tbtn-play { width: 40px; height: 40px; background: var(--tts-ac); color: #fff; }
+.tts-tbtn-play:hover:not(:disabled) { background: #4f52d9; color: #fff; }
+/* Nút play/pause đổi sang trạng thái "Dừng" (đỏ) khi người dùng đã rời khỏi
+   chương đang phát (chuyển qua chương khác trong lúc audio vẫn đang đọc nốt
+   chương cũ) — xem setUIState() trong tts.js. Dùng màu cố định #ff5656 thay
+   vì biến --tts-red (đổi theo theme) để nút Dừng luôn nổi bật nhất quán. */
+.tts-tbtn-stop { background: #ff5656; color: #fff; }
+.tts-tbtn-stop:hover:not(:disabled) { background: #ef4444; color: #fff; }
+.tts-divider { width: 1px; height: 22px; background: var(--tts-bd); flex-shrink: 0; }
+
+/* ── tốc độ (hàng nút nhanh trên thanh chính) ── */
+.tts-speed-wrap {
+  display: flex; align-items: center; gap: 3px; flex-shrink: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: none;
+}
+.tts-speed-wrap::-webkit-scrollbar { display: none; }
+.tts-spd {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  font-size: 12px; font-weight: 600; color: var(--tts-txt2);
+  width: 50px; flex-shrink: 0; padding: 8px 0; border-radius: 8px;
+  text-align: center; white-space: nowrap; transition: color .15s, background .15s;
+}
+.tts-spd:hover { color: var(--tts-txt); background: rgba(255,255,255,.06); }
+.tts-spd.on { color: #fff; background: var(--tts-ac); }
+
+/* ── âm lượng (hàng chính) ── */
+.tts-vol-wrap { display: flex; align-items: center; gap: 6px; color: var(--tts-txt2); flex: 1 1 80px; min-width: 60px; }
+.tts-vol-icon { display: flex; align-items: center; flex-shrink: 0; }
+input[type="range"].tts-vol-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; flex: 1; height: 3px; border-radius: 2px; border: none; outline: none; cursor: pointer;
+  background: linear-gradient(to right, var(--tts-ac) 0%, var(--tts-ac) calc(var(--v, 80)*1%), var(--tts-bd2) calc(var(--v, 80)*1%), var(--tts-bd2) 100%);
+}
+input[type="range"].tts-vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--tts-ac); cursor: pointer; margin-top: 0; box-shadow: none; }
+input[type="range"].tts-vol-slider::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--tts-ac); cursor: pointer; box-shadow: none; }
+
+/* ── trạng thái (icon sóng âm 4 vạch, đổi màu theo trạng thái phát qua
+   currentColor — không hiện chữ; xem title="" gán qua JS để có tooltip khi
+   rê chuột).
+   Lưu ý căn chỉnh: khoảng cách flex gap 2 bên tuy bằng nhau (10px) nhưng
+   NHÌN không đều, vì các phần tử lân cận có "đệm" ẩn khác nhau quanh icon
+   của chính chúng — nút "Đoạn sau" (32x32, icon 16x16 → đệm ~8px mỗi bên),
+   nút tốc độ "1x" (rộng cố định 42px, chữ căn giữa → đệm ~14px mỗi bên) ở
+   desktop; icon loa (14px, đệm 0) ở mobile. Bù thêm margin lệch (margin-left
+   ở desktop, margin-right ở mobile) để tổng khoảng cách nhìn thấy 2 bên
+   bằng nhau, thay vì chỉ canh giữa icon trong 1 khung đối xứng (không đủ vì
+   gốc vấn đề nằm ở phần tử lân cận, không phải icon trạng thái). */
+.tts-status-row { display: inline-flex; align-items: center; flex-shrink: 0; margin-left: 6px; }
+.tts-dot { display: flex; align-items: center; justify-content: center; color: var(--tts-txt3); flex-shrink: 0; }
+#tts-status-dot { cursor: pointer; }
+.tts-dot svg { display: block; }
+.tts-dot.playing { color: var(--tts-ok); animation: tts-dot-pulse 1.4s ease-in-out infinite; }
+.tts-dot.paused { color: var(--tts-warn); }
+.tts-dot.loading { color: var(--tts-ac); animation: tts-dot-pulse .9s ease-in-out infinite; }
+.tts-dot.err { color: var(--tts-red); }
+@keyframes tts-dot-pulse { 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
+
+/* ── cụm nút bên phải: cài đặt / đóng, và popover cài đặt neo dưới đây ── */
+.tts-right { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; position: relative; }
+.tts-gear { position: relative; }
+.tts-gear.open { color: var(--tts-txt); background: rgba(255,255,255,.08); }
+
+/* ============================================================
+   BẢNG CÀI ĐẶT (popover, neo dưới nút bánh răng)
+============================================================ */
+.tts-settings {
+  /* Neo ở #tts-bar-outer (không còn lồng trong .tts-bar/.tts-right nữa) —
+     cách cạnh trên của .tts-bar một khoảng nhỏ (8px). z-index âm để popup
+     luôn nằm DƯỚI lớp .tts-bar trong thứ tự vẽ — bóng đổ (box-shadow) của
+     popup có bán kính lan rộng hơn khoảng hở 8px này, nên nếu không hạ lớp
+     xuống dưới, phần bóng tràn ra sẽ đè lên mặt kính của audio bar. */
+  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: -1;
+  width: 320px; max-width: 86vw;
+  /* Nền kính mờ giống hệt audio bar (.tts-bar) thay vì tối/đục hơn như trước */
+  background: var(--tts-bg2);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--tts-bd);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 14px 34px rgba(0,0,0,.4);
+  display: flex; flex-direction: column;
+  opacity: 0; transform: translateY(6px) scale(.98); pointer-events: none;
+  transition: opacity .16s ease, transform .16s ease;
+  max-height: min(72vh, 560px);
+  overflow-y: auto;
+}
+.tts-settings.open { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+
+.tts-set-row { padding: 10px 0; border-top: 1px solid rgba(255,255,255,.07); }
+.tts-set-row:first-of-type { border-top: none; padding-top: 0; }
+.tts-set-label { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--tts-txt2); margin-bottom: 8px; }
+.tts-set-label b { color: var(--tts-txt); font-weight: 600; }
+.tts-set-val { font-variant-numeric: tabular-nums; color: var(--tts-txt); font-weight: 600; }
+.tts-set-label-left { display: flex; align-items: center; gap: 8px; }
+.tts-set-label-left .tts-mini-ic { color: var(--tts-txt2); display: flex; flex-shrink: 0; }
+
+.tts-set-slider-row { display: flex; align-items: center; gap: 8px; }
+.tts-set-slider-row .tts-mini-ic { color: var(--tts-txt2); flex-shrink: 0; }
+.tts-set-slider-row input[type="range"] { flex: 1; accent-color: var(--tts-ac); }
+
+/* hàng âm lượng chính trong panel: chỉ hiện khi thanh ở chế độ mobile (đã ẩn khỏi hàng chính) */
+.tts-set-volume { display: none; }
+
+/* bỏ đường phân cách giữa dropdown "Nhạc nền" và hàng âm lượng nhạc nền —
+   2 hàng này gộp thành 1 khối liền, không cần border-top mặc định của
+   .tts-set-row */
+#tts-bgm-vol-row { border-top: none; padding-top: 0; }
+.tts-set-row.disabled { opacity: .45; pointer-events: none; }
+
+/* ---- dropdown (giọng đọc / nhạc nền) — dùng <select> gốc, giống hệt demo ---- */
+.tts-select-wrap { position: relative; }
+.tts-select {
+  all: unset; box-sizing: border-box; display: block; width: 100%;
+  background: rgba(255,255,255,.05); border: 1px solid var(--tts-bd); border-radius: 9px;
+  padding: 8px 30px 8px 10px; font-size: 12.5px; color: var(--tts-txt); cursor: pointer;
+  transition: border-color .15s, background .15s;
+  line-height: 1.5;
+}
+.tts-select:hover { border-color: rgba(255,255,255,.26); background: rgba(255,255,255,.08); }
+.tts-select:focus-visible { border-color: var(--tts-ac); }
+.tts-select:disabled { opacity: .4; cursor: not-allowed; }
+.tts-select option { background: #1c1e29; color: var(--tts-txt); }
+.tts-select-wrap .tts-mini-ic {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  color: var(--tts-txt2); pointer-events: none; display: flex;
+}
+.tts-select-wrap:has(.tts-select:disabled) .tts-mini-ic { opacity: .4; }
+.tts-select-note { font-size: 11px; color: var(--tts-txt3); line-height: 1.5; margin-top: 8px; }
+.tts-select-note a { color: var(--tts-ac2); text-decoration: underline; cursor: pointer; }
+
+/* ---- dropdown kiểu menu nổi (giọng đọc / nhạc nền) — thay cho <select> gốc,
+   giống mẫu "pc-menu": nút bấm hiện lựa chọn hiện tại, bấm ra 1 menu nổi
+   (position: fixed, tự tính toạ độ bằng JS) liệt kê từng lựa chọn kèm dấu
+   check ở mục đang chọn; nhạc nền còn có thêm dòng lưu ý ở cuối menu. ---- */
+.tts-dd { position: relative; }
+.tts-dd-trigger {
+  all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between;
+  width: 100%; gap: 8px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--tts-bd); border-radius: 9px;
+  padding: 8px 10px; font-size: 12.5px; color: var(--tts-txt); cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.tts-dd-trigger-left { display: flex; align-items: center; gap: 8px; overflow: hidden; min-width: 0; }
+.tts-dd-trigger-left .tts-mini-ic { color: var(--tts-txt2); flex-shrink: 0; display: flex; }
+.tts-dd-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5; }
+.tts-dd-trigger:hover { border-color: rgba(255,255,255,.26); background: rgba(255,255,255,.08); }
+.tts-dd-trigger.open { border-color: var(--tts-ac); }
+.tts-dd-trigger[disabled] { opacity: .4; cursor: not-allowed; }
+.tts-dd-trigger .tts-mini-ic { color: var(--tts-txt2); flex-shrink: 0; display: flex; }
+
+.tts-dd-menu {
+  position: fixed; z-index: 3000;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--tts-bg3);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--tts-bd);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.5);
+  opacity: 0; transform: translateY(6px) scale(.98); pointer-events: none;
+  transition: opacity .16s ease, transform .16s ease;
+}
+.tts-dd-menu.open { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+.tts-dd-list { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.tts-dd-item {
+  all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; width: 100%; padding: 8px 10px; border-radius: 8px;
+  font-size: 12.5px; color: var(--tts-txt2); cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s;
+  line-height: 1.5;
+}
+.tts-dd-item:hover { background: rgba(255,255,255,.06); color: var(--tts-txt); }
+.tts-dd-item.active { color: var(--tts-txt); background: var(--tts-ac-dim); }
+.tts-dd-item.active:hover { background: var(--tts-ac-dim); }
+/* nhóm icon + tên lựa chọn bên trái, tách khỏi dấu check bên phải để
+   overflow/ellipsis chỉ áp dụng cho phần tên, không đẩy dấu check ra ngoài */
+.tts-dd-item-left { display: flex; align-items: center; gap: 8px; overflow: hidden; min-width: 0; }
+.tts-dd-item-left .tts-mini-ic { color: var(--tts-txt2); flex-shrink: 0; display: flex; transition: color .15s; }
+.tts-dd-item.active .tts-dd-item-left .tts-mini-ic { color: var(--tts-ac2); }
+.tts-dd-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5; }
+.tts-dd-item > svg { flex-shrink: 0; opacity: 0; color: var(--tts-ac2); transition: opacity .12s; }
+.tts-dd-item.active > svg { opacity: 1; }
+.tts-dd-note {
+  font-size: 11px; color: var(--tts-txt3); line-height: 1.5;
+  padding: 8px 8px 4px; margin-top: 4px; border-top: 1px solid rgba(255,255,255,.07);
+  flex-shrink: 0;
+}
+.tts-dd-note a { color: var(--tts-ac2); text-decoration: underline; cursor: pointer; }
+[data-theme="light"] .tts-dd-item svg { color: var(--tts-ac2); }
+
+/* hàng có tiêu đề bên trái + switch bên phải, dropdown bên dưới (Nhạc nền) */
+.tts-set-titlesw { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.tts-set-titlesw span { font-size: 12.5px; color: var(--tts-txt); }
+
+/* switch bật/tắt */
+.tts-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+.tts-switch-row span { font-size: 12.5px; color: var(--tts-txt); }
+.tts-switch-row-label { display: flex; align-items: center; gap: 8px; }
+.tts-switch-row-label .tts-mini-ic { color: var(--tts-txt2); flex-shrink: 0; display: flex; }
+/* Các nút bật/tắt (nhạc nền, tự động chuyển chương, cuộn theo audio...)
+   thu nhỏ 10% so với kích thước gốc (38x22 → 34.2x19.8, thumb 18 → 16.2). */
+.tts-switch { position: relative; width: 34.2px; height: 19.8px; flex-shrink: 0; }
+.tts-switch-track { position: absolute; inset: 0; background: var(--tts-switch-track); border-radius: 999px; transition: background .18s; cursor: pointer; }
+.tts-switch-thumb { position: absolute; top: 1.8px; left: 1.8px; width: 16.2px; height: 16.2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4); transition: transform .18s; pointer-events: none; }
+.tts-switch.on .tts-switch-track { background: var(--tts-ac); }
+.tts-switch.on .tts-switch-thumb { transform: translateX(14.4px); }
+
+input[type="range"] { height: 3px; cursor: pointer; -webkit-appearance: none; appearance: none; border-radius: 2px; outline: none; border: none; background: rgba(255,255,255,.18); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4); margin-top: -5px; }
+input[type="range"]::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: #fff; border: none; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+
+/* ============================================================
+   CHẾ ĐỘ MOBILE — thanh chia 2 dòng
+============================================================ */
+@media (max-width: 620px) {
+  #tts-root { padding: 0 10px 17px; }
+  .tts-bar { flex-wrap: wrap; padding: 10px 10px 8px; row-gap: 8px; }
+  .tts-divider { display: none; }
+
+  /* dòng 1: prev/play/next bên trái → icon trạng thái ngay sau đó → âm
+     lượng lấp đầy khoảng trống còn lại → cài đặt/đóng sát mép phải. */
+  .tts-transport { order: 1; flex-shrink: 0; }
+  .tts-status-row { order: 2; flex-shrink: 0; margin-left: 0; margin-right: 8px; }
+  .tts-vol-wrap { order: 3; flex: 1 1 40px; min-width: 0; }
+  .tts-vol-slider { width: 100%; min-width: 0; }
+  .tts-right { order: 4; margin-left: 0; flex-shrink: 0; }
+
+  /* dòng 2: cụm tốc độ — xuống dòng riêng, các nút chia đều hết chiều ngang */
+  .tts-speed-wrap { order: 5; width: 100%; padding-top: 6px; border-top: 1px solid var(--tts-bd); overflow-x: visible; }
+  .tts-speed-wrap .tts-spd { flex: 1 1 0; text-align: center; padding-left: 4px; padding-right: 4px; }
+
+  .tts-settings { right: -4px; }
+}
+
+/* ── Nút nổi "Nghe" ở lề phải (giống extension) ── */
+.tts-float-btn {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  z-index: 700;
+  background: var(--tts-ac);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,.18); border-right: none;
+  border-radius: 8px 0 0 8px;
+  width: 38px; height: 48px;
+  display: none; /* mặc định ẩn, JS bật lên khi có chương truyện đang mở */
+  align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.tts-float-btn:hover { background: #4f52d9; }
+.tts-float-btn.on { background: var(--tts-ac); }
+.tts-float-btn svg { display: block; }
+
+/* Khi panel "Ghi nhớ quan hệ nhân vật" đang mở, nút nổi này phải chìm
+   xuống dưới panel (panel neo bên phải rộng 295px, z-index 300). */
+body.charmem-open .tts-float-btn { z-index: 250; }
+
+/* Ở mobile (<=680px) nút nổi được thay bằng nút "Nghe" trong toolbar
+   (#listenTbBtn) — nút nổi lúc này dễ khó bấm/che nội dung. */
+@media (max-width: 680px) {
+  .tts-float-btn { display: none !important; }
+}
+
+/* ── Tooltip khi bôi đen văn bản trong nội dung chương ── */
+#tts-sel-tooltip {
+  position: fixed; z-index: 2147483647;
+  font-family: 'Segoe UI', system-ui, Arial, sans-serif;
+  display: none; flex-direction: column; align-items: flex-start; gap: 4px;
+}
+#tts-sel-icon-btn {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--tts-ac); border: 1px solid rgba(255,255,255,.18);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  line-height: 1; transition: background .15s; flex-shrink: 0; padding: 0;
+}
+#tts-sel-icon-btn:hover { background: #4f52d9; }
+#tts-sel-menu {
+  display: none; flex-direction: column; gap: 2px;
+  background: var(--tts-bg2);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--tts-bd); border-radius: 12px; padding: 5px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  min-width: 150px;
+}
+#tts-sel-menu.open { display: flex; }
+#tts-sel-menu button {
+  all: unset; cursor: pointer; box-sizing: border-box;
+  color: var(--tts-txt2); border-radius: 9px; padding: 7px 10px; font-size: 13px;
+  white-space: nowrap; transition: background .15s, color .15s;
+  display: flex; align-items: center; gap: 8px; width: 100%;
+}
+#tts-sel-menu button:hover { background: var(--tts-ac); color: #fff; }
+#tts-sel-menu button svg { display: block; flex-shrink: 0; margin-top: 3px; }
+
+/* ── Khi thanh TTS đang mở: chừa chỗ cho nội dung & các nút nổi khác ──
+   --tts-bar-h được tts.js đo và ghi động (chiều cao thật của .tts-bar). */
+body.tts-open .reading-area {
+  padding-bottom: calc(var(--tts-bar-h, 130px) + 40px);
+  transition: padding-bottom .15s ease;
+}
+/* Đẩy donate/scroll lên khi thanh audio mở: chỉ cần trên mobile/iPad
+   (<=1024px) — ở đó thanh audio đủ rộng/đủ thấp để đè lên 2 nút này.
+   Trên desktop thanh audio không che tới nên không cần đẩy. */
+@media (max-width: 1024px) {
+  body.tts-open #scrollTopBtn {
+    bottom: calc(var(--tts-bar-h, 130px) + 45px);
+    z-index: 850;
+    transition: bottom .15s ease;
+  }
+  body.tts-open .support-sticker {
+    bottom: calc(var(--tts-bar-h, 130px) + 45px);
+    z-index: 850;
+    transition: bottom .15s ease;
+  }
+}
+body.tts-open .mini-toast {
+  bottom: calc(var(--tts-bar-h, 130px) + 45px);
+  transition: opacity .2s ease, transform .2s ease, bottom .15s ease;
+}
+@media (max-width: 680px) {
+  body.tts-open .support-sticker,
+  body.tts-open #scrollTopBtn {
+    bottom: calc(var(--tts-bar-h, 130px) + 32px);
+  }
+  body.tts-open .mini-toast {
+    bottom: calc(var(--tts-bar-h, 130px) + 32px);
+  }
+}
+
+/* Ẩn nút scroll khi mở popover cài đặt — cần cả ở mobile lẫn iPad
+   (<=1024px), vì popover neo bên phải thanh bar đè lên vị trí nút này ở
+   cả 2 kích thước màn hình đó. */
+@media (max-width: 1024px) {
+  body:has(.tts-settings.open) #scrollTopBtn {
+    display: none;
+  }
+}
+
+/* Ẩn donate khi mở popover cài đặt — chỉ ở mobile, nơi popover gần
+   full-width thanh mới thực sự đè lên donate. Ở iPad popover đủ hẹp/đủ chỗ
+   trống bên cạnh nên donate không bị che, không cần ẩn. */
+@media (max-width: 680px) {
+  body:has(.tts-settings.open) .support-sticker {
+    display: none;
+  }
+}
+
+/* ── Highlight đoạn (chunk) đang được đọc — bọc bằng <mark> trong tts.js
+   (highlightChunkRange). Không dùng var(--tts-ac-dim) vì biến đó chỉ được
+   ghi đè theo theme sáng/tối bên trong phạm vi #tts-root — trong khi
+   .tts-reading-highlight lại nằm trong nội dung chương (.reading-content),
+   ngoài phạm vi đó — nên dùng thẳng rgba cố định, đủ nhạt để không đổi màu
+   chữ, hoạt động tốt trên cả nền sáng lẫn tối. */
+.tts-reading-highlight {
+  background: rgba(99, 102, 241, .3);
+  color: inherit;
+  border-radius: 3px;
+  transition: background .15s ease;
+}
+
+/* ── Chế độ sáng ── */
+[data-theme="light"] #tts-root {
+  --tts-bg2: rgba(255,255,255,.82);
+  --tts-bg3: rgba(255,255,255,.94);
+  --tts-bg4: rgba(0,0,0,.04);
+  --tts-bg-hov: rgba(0,0,0,.06);
+  --tts-bd:  rgba(0,0,0,.09);
+  --tts-bd2: rgba(0,0,0,.16);
+  --tts-txt:  #2d2d2d;
+  --tts-txt2: #5a5a5a;
+  --tts-txt3: #7c848d;
+  --tts-ac:     #6366f1;
+  --tts-ac2:    #4f46e5;
+  --tts-ac-dim: #eef0ff;
+  --tts-ok:      #16a34a;
+  --tts-warn:    #d97706;
+  --tts-red:     #dc2626;
+  --tts-switch-track: rgba(0,0,0,.14);
+}
+[data-theme="light"] .tts-bar { box-shadow: 0 10px 28px rgba(0,0,0,.12); }
+[data-theme="light"] .tts-settings,
+[data-theme="light"] #tts-sel-menu,
+[data-theme="light"] .tts-float-btn,
+[data-theme="light"] #scrollTopBtn {
+  box-shadow: none;
+}
+[data-theme="light"] .tts-select option { background: #fff; color: #2d2d2d; }

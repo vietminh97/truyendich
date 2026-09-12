@@ -1,0 +1,213 @@
+/* =====================================================================
+ * edit-text.css — style cho popup "Sửa văn bản" (find & replace)
+ * Đồng bộ 1:1 với bản demo "edit-text-advanced-demo.html" — cùng kích
+ * thước, màu sắc, khoảng cách. Không định nghĩa lại các biến màu gốc
+ * (--bg, --border, --text... đã có sẵn ở :root/index.html), chỉ style
+ * riêng cho popup này.
+ * ===================================================================== */
+
+.et-box{
+  border:1px solid var(--border);max-width:640px;width:92%;display:flex;flex-direction:column;max-height:88vh;border-radius:var(--r-lg);
+  background:var(--bg3);
+  container-type:inline-size;container-name:et-box;
+}
+
+/* Nền tối phía sau popup: đồng bộ với lớp phủ của Tủ truyện/Mục lục
+   (.mobile-backdrop trong index.html) thay vì dùng màu rgba(0,0,0,.45)
+   cố định của .popup-overlay dùng chung. */
+#etOverlay{background:rgba(0,0,0,.45);}
+@media (max-width:680px){
+  #etOverlay{background:rgba(0,0,0,.45);}
+}
+
+/* ---------- Header ---------- */
+.et-head{padding:20px 24px 16px;flex-shrink:0;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);}
+.et-head-icon{
+  width:42px;height:42px;flex-shrink:0;border-radius:var(--r-md);background:rgb(118 118 126 / 13%);color:var(--text2);
+  display:flex;align-items:center;justify-content:center;border:none;padding:0;font:inherit;
+}
+[data-theme="dark"] .et-head-icon{background:rgb(50 52 57);}
+.et-head-icon svg{width:19px;height:19px;}
+.et-head-text{flex:1;min-width:0;}
+.et-title{font-size:17px;font-weight:700;letter-spacing:-.3px;color:var(--text);display:flex;align-items:center;gap:6px;overflow:hidden;}
+.et-title-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.et-subtitle{font-size:12.5px;color:var(--text3);margin-top:2px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.et-head-btns{display:flex;align-items:center;gap:4px;flex-shrink:0;}
+
+.et-head-action, .et-close{
+  width:34px;height:34px;flex-shrink:0;border:1px solid transparent;background:transparent;border-radius:50%;color:var(--text3);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s,border-color .15s;
+}
+.et-head-action svg, .et-close svg{width:16px;height:16px;}
+.et-head-action:hover{background:var(--btn-hover);color:var(--text);}
+@media (hover:hover){
+  .et-close:hover{background:#fff0f2;color:#e5484d;border-color:#e5484d;}
+  [data-theme="dark"] .et-close:hover{background:rgba(255,107,134,.15);color:#ff6b86;border-color:rgba(255,107,134,.45);}
+}
+
+/* ---------- Scroll container ---------- */
+.et-scroll{overflow-y:auto;padding:16px 24px 24px;flex:1;min-height:0;}
+.et-scroll::-webkit-scrollbar{width:7px;}
+.et-scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:8px;}
+.et-scroll::-webkit-scrollbar-track{background:transparent;}
+
+.et-scope-list{display:flex;flex-direction:column;gap:10px;}
+
+/* ---------- Scope block (accordion item) ---------- */
+.et-scope-block{
+  border:1px solid var(--border);border-radius:var(--r-md);
+  background:var(--bg2);overflow:hidden;
+  transition:background .15s,border-color .15s,box-shadow .15s;
+}
+.et-scope-block.disabled{opacity:.5;}
+.et-scope-block.selected{
+  border-color:rgba(99,102,241,.55);
+  box-shadow:0 0 0 1px rgba(99,102,241,.12), 0 8px 22px rgba(99,102,241,.10);
+}
+
+.et-scope-header{
+  display:flex;align-items:center;gap:13px;padding:14px 16px;width:100%;border:none;background:transparent;
+  text-align:left;color:var(--text);cursor:pointer;font:inherit;
+}
+.et-scope-block.disabled .et-scope-header{cursor:default;}
+
+.et-scope-glyph{
+  width:40px;height:40px;flex-shrink:0;border-radius:var(--r-md);position:relative;
+  display:flex;align-items:center;justify-content:center;background:rgb(118 118 126 / 12%);color:var(--text2);
+  transition:background .15s,color .15s;
+}
+[data-theme="dark"] .et-scope-glyph{background:rgb(54 55 61);}
+.et-scope-block.selected .et-scope-glyph{background:rgba(99,102,241,.16);color:var(--accent);}
+[data-theme="dark"] .et-scope-block.selected .et-scope-glyph{background:rgba(99,102,241,.24);}
+.et-scope-glyph svg{width:18px;height:18px;}
+.et-scope-text{flex:1;min-width:0;}
+.et-scope-name{font-size:14.5px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.et-scope-meta{font-size:12px;color:var(--text3);margin-top:1px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.et-scope-meta.accent{color:var(--accent);font-weight:600;}
+
+.et-chevron{flex-shrink:0;width:16px;height:16px;stroke:var(--text4);transition:transform .2s ease,stroke .15s;}
+.et-scope-block.selected .et-chevron{transform:rotate(180deg);stroke:var(--accent);}
+
+/* Collapse animation (grid trick) */
+.et-scope-rules{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease;}
+.et-scope-block.selected .et-scope-rules{grid-template-rows:1fr;}
+.et-scope-rules-inner{overflow:hidden;}
+.et-rules-table{padding:14px 16px 16px;border-top:1px solid var(--border);}
+
+/* ---------- Hàng công tắc "Ưu tiên cụm dài trước" + nút Chi tiết ---------- */
+.et-header-io{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.et-detail-btn{
+  display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;
+  border-radius:var(--r-sm);border:1px solid var(--border2);background:var(--btn-bg);color:var(--text3);
+  cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0;
+}
+.et-detail-btn:hover{background:var(--btn-hover);color:var(--text);}
+.et-detail-btn svg{width:16px;height:16px;flex-shrink:0;}
+
+.et-switch{position:relative;flex-shrink:0;width:34px;height:20px;margin-top:2px;}
+.et-switch input{opacity:0;width:0;height:0;position:absolute;}
+.et-switch-track{
+  position:absolute;inset:0;background:var(--border2);border-radius:20px;cursor:pointer;transition:background .18s;
+}
+.et-switch-track::after{
+  content:"";position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;border-radius:50%;
+  transition:transform .18s;box-shadow:0 1px 2px rgba(0,0,0,.25);
+}
+.et-switch input:checked + .et-switch-track{background:var(--accent);}
+.et-switch input:checked + .et-switch-track::after{transform:translateX(14px);}
+.et-sort-row{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:14px;border-top:1px dashed var(--border);flex-wrap:wrap;}
+.et-sort-text{flex:1;min-width:0;}
+.et-sort-title{font-size:13.5px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+
+/* ---------- Bảng quy tắc — mỗi dòng gộp thành 1 hàng ngang ---------- */
+.et-rows{display:flex;flex-direction:column;gap:12px;padding:2px 6px 2px 0;max-height:260px;overflow-y:auto;}
+.et-rows::-webkit-scrollbar{width:6px;}
+.et-rows::-webkit-scrollbar-thumb{background:var(--border2);border-radius:8px;}
+.et-rows::-webkit-scrollbar-track{background:transparent;}
+
+.et-rule-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.et-rule-inputs{display:flex;align-items:center;gap:8px;flex:1;min-width:0;flex-wrap:wrap;}
+.et-rule-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.et-row-input{
+  flex:1;min-width:120px;padding:11px 14px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--input-bg);
+  font-size:13.5px;font-weight:600;color:var(--text);outline:none;font-family:inherit;transition:border-color .15s;
+}
+.et-row-input:focus{border-color:var(--accent);}
+.et-row-input:focus-visible{outline:none;}
+.et-row-input::placeholder{color:var(--text4);font-weight:500;}
+.et-row-arrow{flex-shrink:0;width:14px;height:14px;stroke:var(--text4);}
+
+.et-opt-group{display:flex;align-items:center;gap:5px;flex-shrink:0;}
+.et-opt-btn{
+  width:28px;height:28px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--input-bg);color:var(--text3);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;letter-spacing:-.3px;
+  transition:all .15s;flex-shrink:0;padding:0;font-family:inherit;
+}
+.et-opt-btn:hover{background:var(--btn-hover);color:var(--text);}
+.et-opt-btn.active{background:rgba(99,102,241,.14);color:var(--accent);border-color:var(--accent);}
+[data-theme="dark"] .et-opt-btn.active{background:rgba(99,102,241,.24);}
+
+.et-row-del{
+  background:none;border:none;color:var(--text4);cursor:pointer;padding:6px;border-radius:50%;flex-shrink:0;display:flex;
+  transition:background .15s,color .15s,transform .1s;
+}
+@media (hover:hover){
+  .et-row-del:hover{background:#fff0f2;color:#e5484d;}
+  [data-theme="dark"] .et-row-del:hover{background:rgba(255,107,134,.15);color:#ff6b86;}
+}
+.et-row-del:active{transform:scale(.9);}
+.et-row-del svg{width:14px;height:14px;}
+
+/* ---------- Mobile: mỗi dòng quy tắc chỉ còn 2 hàng — hàng input (từ khoá +
+   mũi tên + thay bằng) và hàng nút (Aa/[W]/.*/xoá), có đường phân cách giữa
+   các dòng quy tắc liên tiếp. Dùng song song @media (viewport thật) và
+   @container (bề rộng khung popup) để chắc chắn hoạt động mọi nơi. ---------- */
+@media (max-width:480px){
+  .et-rows{gap:0;}
+  .et-rule-row{flex-direction:column;align-items:stretch;gap:8px;padding:12px 0;}
+  .et-rule-row:first-child{padding-top:0;}
+  .et-rule-row + .et-rule-row{border-top:1px solid var(--border);}
+  .et-rule-inputs{width:100%;flex-wrap:nowrap;gap:6px;}
+  .et-row-input{min-width:0;padding:10px 10px;font-size:13px;}
+  .et-rule-actions{width:100%;justify-content:space-between;}
+}
+@container et-box (max-width:520px){
+  .et-rows{gap:0;}
+  .et-rule-row{flex-direction:column;align-items:stretch;gap:8px;padding:12px 0;}
+  .et-rule-row:first-child{padding-top:0;}
+  .et-rule-row + .et-rule-row{border-top:1px solid var(--border);}
+  .et-rule-inputs{width:100%;flex-wrap:nowrap;gap:6px;}
+  .et-row-input{min-width:0;padding:10px 10px;font-size:13px;}
+  .et-rule-actions{width:100%;justify-content:space-between;}
+}
+
+/* ---------- Panel "Chi tiết" (Xuất/Nhập quy tắc, thay chỗ danh sách phạm vi) ---------- */
+.et-io-panel{
+  display:flex;flex-direction:column;gap:12px;
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-md);padding:16px;
+}
+.et-io-back{
+  display:inline-flex;align-items:center;gap:6px;align-self:flex-start;background:none;border:none;color:var(--text3);
+  font-size:12.5px;font-weight:600;cursor:pointer;padding:4px 2px;font-family:inherit;
+}
+.et-io-back:hover{color:var(--text);}
+.et-io-back svg{width:14px;height:14px;}
+.et-io-title{font-size:14.5px;font-weight:700;color:var(--text);}
+.et-io-textarea{
+  width:100%;min-height:340px;padding:12px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--input-bg);
+  color:var(--text);font-size:12.5px;font-family:'Consolas','SFMono-Regular',monospace;line-height:1.6;outline:none;resize:vertical;
+}
+.et-io-textarea:focus{border-color:var(--accent);}
+.et-io-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.et-io-btn{
+  flex:1 1 130px;justify-content:center;
+  display:inline-flex;align-items:center;gap:7px;padding:9px 15px;border:1px solid var(--border2);border-radius:var(--r-sm);
+  background:var(--btn-bg);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit;
+}
+.et-io-btn:hover{background:var(--btn-hover);}
+.et-io-btn.primary{background:var(--accent);color:#fff;border-color:transparent;}
+.et-io-btn.primary:hover{filter:brightness(1.08);}
+.et-io-btn svg{width:14px;height:14px;}
+.et-io-msg{font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:var(--r-sm);}
+.et-io-msg.ok{background:rgba(29,154,91,.12);color:var(--good);}
+.et-io-msg.err{background:rgba(229,72,77,.12);color:var(--danger);}

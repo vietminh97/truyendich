@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#9333ea" />
+    </linearGradient>
+    <linearGradient id="pinkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899" />
+      <stop offset="100%" stop-color="#f43f5e" />
+    </linearGradient>
+  </defs>
+  <!-- Background Card -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  
+  <!-- Left Page -->
+  <path d="M 256 140 C 190 110, 110 110, 80 130 L 80 330 C 110 310, 190 310, 256 340 Z" fill="#ffffff" fill-opacity="0.95" stroke="#ffffff" stroke-width="22" stroke-linejoin="round" stroke-linecap="round" />
+  
+  <!-- Right Page -->
+  <path d="M 256 140 C 322 110, 402 110, 432 130 L 432 330 C 402 310, 322 310, 256 340 Z" fill="#ffffff" fill-opacity="0.9" stroke="#ffffff" stroke-width="22" stroke-linejoin="round" stroke-linecap="round" />
+
+  <!-- Center Spine -->
+  <line x1="256" y1="140" x2="256" y2="340" stroke="#4f46e5" stroke-width="22" stroke-linecap="round" />
+
+  <!-- Audio Waves on Left Page -->
+  <line x1="120" y1="200" x2="200" y2="200" stroke="#4f46e5" stroke-width="10" stroke-linecap="round" />
+  <line x1="120" y1="240" x2="180" y2="240" stroke="#4f46e5" stroke-width="10" stroke-linecap="round" />
+  <line x1="120" y1="280" x2="210" y2="280" stroke="#4f46e5" stroke-width="10" stroke-linecap="round" />
+
+  <!-- Large Sparkle Star Center Top -->
+  <path d="M 256 90 L 268 118 L 296 130 L 268 142 L 256 170 L 244 142 L 216 130 L 244 118 Z" fill="url(#pinkGrad)" />
+
+  <!-- Small Sparkle Star Right -->
+  <path d="M 360 176 L 367 193 L 384 200 L 367 207 L 360 224 L 353 207 L 336 200 L 353 193 Z" fill="#38bdf8" />
+</svg>
