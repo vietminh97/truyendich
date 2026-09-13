@@ -958,6 +958,21 @@
     else pauseBgm();
   }
 
+  function getChapterSpeechText(idx) {
+    if (typeof S === 'undefined' || !S.chapters || !S.chapters[idx]) return null;
+    const ch = S.chapters[idx];
+    const hasTrans = !!(S.translations && S.translations[idx]);
+    if (hasTrans || !S.auto) {
+      const raw = hasTrans ? S.translations[idx] : ch.content;
+      if (raw && raw.trim()) {
+        return (typeof cleanCensorChars === 'function' && typeof applyReplace === 'function' && typeof stripTitle === 'function')
+          ? cleanCensorChars(applyReplace(stripTitle(raw, ch.title)))
+          : raw.trim();
+      }
+    }
+    return null;
+  }
+
   function getCurrentText() {
     const el = document.querySelector('#chContent .reading-content');
     if (el && el.innerText.trim()) return el.innerText.trim();
@@ -966,14 +981,10 @@
       const t = cc.innerText.trim();
       if (t) return t;
     }
-    if (typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) {
-      const ch = S.chapters[S.cur];
-      const raw = (S.translations && S.translations[S.cur]) ? S.translations[S.cur] : ch.content;
-      if (raw) {
-        return (typeof cleanCensorChars === 'function' && typeof applyReplace === 'function' && typeof stripTitle === 'function')
-          ? cleanCensorChars(applyReplace(stripTitle(raw, ch.title)))
-          : raw.trim();
-      }
+    const idx = (typeof S !== 'undefined') ? S.cur : null;
+    if (idx != null) {
+      const text = getChapterSpeechText(idx);
+      if (text) return text;
     }
     return '';
   }
@@ -1892,20 +1903,7 @@
     if (typeof S !== 'undefined' && S.chapters) {
       const curChap = state.playingCur != null ? state.playingCur : S.cur;
       if (curChap < S.chapters.length - 1) {
-        if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
-        const ni = curChap + 1;
-        if (state.nextChap && state.nextChap.ready && state.nextChap.blob && state.nextChap.ni === ni) {
-          const prep = state.nextChap;
-          state.nextChap = null;
-          if (typeof nav === 'function') nav(ni);
-          state.playingCur = ni;
-          state.playingChaptersRef = S.chapters;
-          state.playingSig = chapterSignature(ni);
-          playPreparedBlob(prep.blob, state.token, 0);
-          return;
-        }
-        if (typeof nav === 'function') nav(ni);
-        setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 150);
+        switchToChapter(curChap + 1, false);
       }
     }
   }
@@ -1914,9 +1912,7 @@
     if (typeof S !== 'undefined' && S.chapters) {
       const curChap = state.playingCur != null ? state.playingCur : S.cur;
       if (curChap > 0) {
-        if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
-        if (typeof nav === 'function') nav(curChap - 1);
-        setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 250);
+        switchToChapter(curChap - 1, false);
       }
     }
   }
@@ -2275,11 +2271,9 @@
       if (myToken !== state.token || state.nextChap !== prep) { clearInterval(poll); return; }
       const ch = (typeof S !== 'undefined') ? S.chapters[ni] : null;
       if (!ch) { clearInterval(poll); prep.failed = true; return; }
-      const hasText = !!S.translations[ni] || !S.auto;
-      if (hasText) {
+      const text = getChapterSpeechText(ni);
+      if (text) {
         clearInterval(poll);
-        const raw = S.translations[ni] || ch.content;
-        const text = cleanCensorChars(applyReplace(stripTitle(raw, ch.title)));
         const blocks = splitChapterIntoBlocks(text, 520);
         if (!blocks.length) { prep.failed = true; return; }
         synthesizeBlocksParallel(blocks, myToken, null).then((blob) => {
@@ -2300,92 +2294,115 @@
     }, 500);
   }
 
-  async function finishChapterAutoNext() {
-    if (typeof S === 'undefined' || typeof nav !== 'function') {
-      stopReading('Đã đọc xong chương.');
+  async function switchToChapter(targetIndex, isAutoNext = false) {
+    if (typeof S === 'undefined' || !S.chapters || !S.chapters.length) return;
+    if (targetIndex < 0) {
+      setStatus('Đây là chương đầu tiên.');
       return;
     }
-    const myToken = state.token;
-    const wasDetached = state.chapterDetached;
-    const baseCur = state.playingCur != null ? state.playingCur : S.cur;
-    setUIState('loading');
-    setStatus(wasDetached ? 'Đang tự động đọc tiếp chương kế (không đổi trang)…' : 'Đang chuyển chương tiếp theo…');
-
-    let prep = state.nextChap;
-    if (!prep && baseCur < S.chapters.length - 1) {
-      prepareNextChapter();
-      prep = state.nextChap;
-    }
-
-    if (prep) {
-      const started = Date.now();
-      while (!prep.ready && !prep.failed) {
-        if (myToken !== state.token) return;
-        if (Date.now() - started > 35000) { prep.failed = true; break; }
-        await new Promise(r => setTimeout(r, 200));
-      }
-      if (myToken !== state.token) return;
-
-      if (prep.ready && prep.blob && baseCur + 1 === prep.ni) {
-        state.nextChap = null;
-        if (!state.chapterDetached) {
-          nav(prep.ni);
-          syncExpectedChapter();
-        }
-        state.playingCur = prep.ni;
-        state.playingChaptersRef = S.chapters;
-        state.playingSig = chapterSignature(prep.ni);
-        playPreparedBlob(prep.blob, myToken, 0);
-        return;
-      }
-    }
-
-    state.nextChap = null;
-    if (baseCur >= S.chapters.length - 1) {
+    if (targetIndex >= S.chapters.length) {
       clearResumePoint();
       stopReading('Đã đọc xong toàn bộ truyện.');
       return;
     }
 
-    if (state.chapterDetached) {
-      const ni = baseCur + 1;
-      if (typeof _startPreload === 'function') _startPreload(ni);
-      const started2 = Date.now();
-      const poll = setInterval(() => {
-        if (myToken !== state.token) { clearInterval(poll); return; }
-        const ch = S.chapters[ni];
-        if (!ch) { clearInterval(poll); stopReading('Không tìm thấy chương tiếp theo.'); return; }
-        const hasText = !!S.translations[ni] || !S.auto;
-        if (hasText) {
-          clearInterval(poll);
-          const raw = S.translations[ni] || ch.content;
-          const text = cleanCensorChars(applyReplace(stripTitle(raw, ch.title)));
-          state.playingCur = ni;
-          state.playingChaptersRef = S.chapters;
-          state.playingSig = chapterSignature(ni);
-          startReadingBackground(text);
-        } else if (Date.now() - started2 > 35000) {
-          clearInterval(poll);
-          stopReading('Chương tiếp theo chưa dịch xong, dừng đọc.');
+    if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
+
+    state.token++;
+    const myToken = state.token;
+
+    if (chapterAudio) {
+      try {
+        chapterAudio.pause();
+        chapterAudio.onended = null;
+        chapterAudio.onerror = null;
+        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(chapterAudio.src);
         }
-      }, 500);
+      } catch (_) {}
+    }
+
+    state.allBlocksReady = false;
+    state.isBuffering = false;
+    state.playingCur = targetIndex;
+    state.playingChaptersRef = S.chapters;
+    state.playingSig = chapterSignature(targetIndex);
+    state.chapterDetached = false;
+    state.fullChapter = true;
+
+    setUIState('loading');
+    updateNavButtons();
+
+    if (typeof nav === 'function') nav(targetIndex);
+    syncExpectedChapter();
+
+    // 1. Nếu đã nạp sẵn âm thanh trong state.nextChap:
+    const prep = state.nextChap;
+    if (prep && prep.ni === targetIndex && prep.ready && prep.blob) {
+      state.nextChap = null;
+      state.allBlocksReady = true;
+      state.fullChapterBlob = prep.blob;
+      playPreparedBlob(prep.blob, myToken, 0);
+      showLoadingBanner('Đã nạp xong âm thanh chương mới!', 100);
+      setTimeout(hideLoadingBanner, 1000);
       return;
     }
 
-    nav(baseCur + 1);
-    syncExpectedChapter();
-    const started2 = Date.now();
-    const poll = setInterval(() => {
-      if (myToken !== state.token) { clearInterval(poll); return; }
-      const text = getCurrentText();
-      if (text) {
-        clearInterval(poll);
-        startReading(text, true);
-      } else if (Date.now() - started2 > 35000) {
-        clearInterval(poll);
-        stopReading('Chương tiếp theo chưa dịch xong, dừng đọc.');
+    // 2. Nếu đang nạp dở trong state.nextChap: chờ tối đa 4s
+    if (prep && prep.ni === targetIndex && !prep.failed) {
+      showLoadingBanner('Đang hoàn tất nạp âm thanh chương mới...', 75);
+      const waitStart = Date.now();
+      while (!prep.ready && !prep.failed && Date.now() - waitStart < 4000) {
+        if (myToken !== state.token) return;
+        await new Promise(r => setTimeout(r, 200));
       }
-    }, 500);
+      if (myToken !== state.token) return;
+      if (prep.ready && prep.blob) {
+        state.nextChap = null;
+        state.allBlocksReady = true;
+        state.fullChapterBlob = prep.blob;
+        playPreparedBlob(prep.blob, myToken, 0);
+        showLoadingBanner('Đã nạp xong âm thanh chương mới!', 100);
+        setTimeout(hideLoadingBanner, 1000);
+        return;
+      }
+    }
+
+    state.nextChap = null;
+
+    // 3. Nếu chưa nạp xong: kích hoạt preload/dịch và chờ văn bản tiếng Việt
+    if (typeof _startPreload === 'function') _startPreload(targetIndex);
+    showLoadingBanner('Đang chuyển sang chương mới & nạp âm thanh...', 15);
+    setStatus('Đang chuyển chương tiếp theo…');
+
+    const started = Date.now();
+    while (Date.now() - started < 35000) {
+      if (myToken !== state.token) return;
+      const text = getChapterSpeechText(targetIndex) || getCurrentText();
+      if (text) {
+        startReading(text, true, 0);
+        return;
+      }
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    if (myToken === state.token) {
+      stopReading('Chương mới chưa có nội dung hoặc chưa dịch xong.');
+    }
+  }
+
+  async function finishChapterAutoNext() {
+    if (typeof S === 'undefined' || typeof nav !== 'function') {
+      stopReading('Đã đọc xong chương.');
+      return;
+    }
+    const baseCur = state.playingCur != null ? state.playingCur : S.cur;
+    if (baseCur >= S.chapters.length - 1) {
+      clearResumePoint();
+      stopReading('Đã đọc xong toàn bộ truyện.');
+      return;
+    }
+    await switchToChapter(baseCur + 1, true);
   }
 
   async function onAudioEnded() {
