@@ -191,7 +191,7 @@
     }
     while (pool.length) {
       const batch = pool.splice(0, raceCount);
-      const res = await raceBatchFast(batch, text, voice, rate, 3500);
+      const res = await raceBatchFast(batch, text, voice, rate, 5000);
       if (res && res.blob) {
         const foundServer = batch[res.serverIndexInBatch];
         const realIdx = SERVERS.indexOf(foundServer);
@@ -1019,29 +1019,13 @@
     return blocks;
   }
 
-  async function synthesizeBlocksParallel(blocks, myToken, onProgress, onStreamUpdate) {
+  async function synthesizeBlocksParallel(blocks, myToken, onProgress) {
     const n = blocks.length;
     const blobs = new Array(n).fill(null);
     let completed = 0;
     const isTikTok = VOICE_ENGINE.get(state.voice) === 'tiktok';
     const concurrency = isTikTok ? 1 : Math.min(8, n);
     let queueIdx = 0;
-    let highestContiguous = 0;
-
-    function checkContiguousAndStream() {
-      let contiguous = 0;
-      while (contiguous < n && blobs[contiguous]) {
-        contiguous++;
-      }
-      if (contiguous > highestContiguous && typeof onStreamUpdate === 'function') {
-        highestContiguous = contiguous;
-        try {
-          const contiguousBlobs = blobs.slice(0, contiguous);
-          const partialBlob = new Blob(contiguousBlobs, { type: 'audio/mpeg' });
-          onStreamUpdate(partialBlob, contiguous, n);
-        } catch (_) {}
-      }
-    }
 
     async function worker() {
       while (queueIdx < n) {
@@ -1053,7 +1037,6 @@
           blobs[i] = new Blob([], { type: 'audio/mpeg' });
           completed++;
           if (onProgress) onProgress(completed, n);
-          checkContiguousAndStream();
           continue;
         }
 
@@ -1063,7 +1046,6 @@
         blobs[i] = blob;
         completed++;
         if (onProgress) onProgress(completed, n);
-        checkContiguousAndStream();
       }
     }
 
@@ -2120,61 +2102,14 @@
       return;
     }
 
-    let playbackStarted = false;
-    const onStreamUpdate = (partialBlob, readyCount, totalCount) => {
-      if (myToken !== state.token) return;
-
-      const shouldStartNow = !playbackStarted && (
-        readyCount >= 2 ||
-        readyCount === totalCount ||
-        totalCount === 1 ||
-        (forceResumeTime > 0 && readyCount >= 3)
-      );
-
-      if (shouldStartNow) {
-        playbackStarted = true;
-        playPreparedBlob(partialBlob, myToken, forceResumeTime);
-        const pct = Math.round((readyCount / totalCount) * 100);
-        showLoadingBanner(`Đang phát âm thanh • Nạp sẵn ${readyCount}/${totalCount} đoạn (${pct}%)...`, pct);
-        return;
-      }
-
-      if (playbackStarted && chapterAudio) {
-        const curTime = chapterAudio.currentTime || 0;
-        const wasPaused = chapterAudio.paused && !state.isBuffering;
-        const audio = getChapterAudio();
-        const oldSrc = audio.src;
-        audio.src = URL.createObjectURL(partialBlob);
-        if (oldSrc && oldSrc.startsWith('blob:')) {
-          try { URL.revokeObjectURL(oldSrc); } catch (_) {}
-        }
-        applySpeedToAudio(audio, state.speed);
-        if (curTime > 0) {
-          try { audio.currentTime = curTime; } catch (_) {}
-        }
-        if (!wasPaused || state.isBuffering) {
-          state.isBuffering = false;
-          audio.play().catch(() => {});
-          state.playing = true;
-          setUIState('playing');
-        }
-        const pct = Math.round((readyCount / totalCount) * 100);
-        if (readyCount < totalCount) {
-          showLoadingBanner(`Đang phát âm thanh • Nạp sẵn ${readyCount}/${totalCount} đoạn (${pct}%)...`, pct);
-        }
-      }
-    };
-
     const fullBlob = await synthesizeBlocksParallel(blocks, myToken, (done, total) => {
       if (myToken !== state.token) return;
       const pct = Math.round((done / total) * 100);
       if (ui.progressBar) ui.progressBar.style.width = pct + '%';
-      const msg = playbackStarted
-        ? `Đang phát âm thanh • Nạp sẵn ${done}/${total} đoạn (${pct}%)`
-        : `Đang kết nối & nạp âm thanh (${done}/${total} đoạn)...`;
+      const msg = `Đang tải âm thanh: ${done}/${total} đoạn (${pct}%)...`;
       showLoadingBanner(msg, pct);
       setStatus(msg);
-    }, onStreamUpdate);
+    });
 
     if (myToken !== state.token) {
       hideLoadingBanner();
@@ -2190,31 +2125,9 @@
     state.isBuffering = false;
     state.fullChapterBlob = fullBlob;
 
-    if (playbackStarted && chapterAudio) {
-      const curTime = chapterAudio.currentTime || 0;
-      const wasPaused = chapterAudio.paused;
-      const audio = getChapterAudio();
-      const oldSrc = audio.src;
-      audio.src = URL.createObjectURL(fullBlob);
-      if (oldSrc && oldSrc.startsWith('blob:')) {
-        try { URL.revokeObjectURL(oldSrc); } catch (_) {}
-      }
-      applySpeedToAudio(audio, state.speed);
-      if (curTime > 0) {
-        try { audio.currentTime = curTime; } catch (_) {}
-      }
-      if (!wasPaused) {
-        audio.play().catch(() => {});
-        state.playing = true;
-        setUIState('playing');
-      }
-      showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-      setTimeout(hideLoadingBanner, 1200);
-    } else {
-      playPreparedBlob(fullBlob, myToken, forceResumeTime);
-      showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-      setTimeout(hideLoadingBanner, 1200);
-    }
+    playPreparedBlob(fullBlob, myToken, forceResumeTime);
+    showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+    setTimeout(hideLoadingBanner, 1000);
   }
 
   function startReadingBackground(text) {
