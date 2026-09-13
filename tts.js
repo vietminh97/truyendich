@@ -44,7 +44,7 @@
   // "Tự động chuyển chương") đều lỗi gần như tức thời → tua nhanh hết cả
   // chương trong im lặng (không có tiếng đọc), chỉ thấy highlight/tiến độ
   // vẫn chạy và thậm chí tự nhảy sang chương sau.
-  const MAX_CONSECUTIVE_SYNTH_FAILURES = 2;
+  const MAX_CONSECUTIVE_SYNTH_FAILURES = 5;
   const CHUNK0_RACE_SERVERS = 4;
   const SYNTH_RATE = '+0%';
 
@@ -137,19 +137,64 @@
     } catch (e) { clearTimeout(timer); return null; }
   }
 
+  function raceBatchFast(batch, text, voice, rate, timeoutMs = 3500) {
+    return new Promise((resolve) => {
+      let pending = batch.length;
+      if (!pending) { resolve(null); return; }
+      let done = false;
+
+      batch.forEach((server, idx) => {
+        const startTime = Date.now();
+        fetchWorker(server, text, voice, rate, timeoutMs).then(blob => {
+          if (done) return;
+          if (blob) {
+            done = true;
+            server.lastLatency = Date.now() - startTime;
+            server.failCount = 0;
+            resolve({ blob, serverIndexInBatch: idx });
+          } else {
+            server.failCount = (server.failCount || 0) + 1;
+            pending--;
+            if (pending === 0 && !done) {
+              done = true;
+              resolve(null);
+            }
+          }
+        }).catch(() => {
+          if (done) return;
+          server.failCount = (server.failCount || 0) + 1;
+          pending--;
+          if (pending === 0 && !done) {
+            done = true;
+            resolve(null);
+          }
+        });
+      });
+    });
+  }
+
   async function raceWorkers(text, voice, rate, raceCount = 4) {
+    const sortedPool = [...SERVERS].sort((a, b) => {
+      const failA = a.failCount || 0;
+      const failB = b.failCount || 0;
+      if (failA !== failB) return failA - failB;
+      const latA = a.lastLatency || 9999;
+      const latB = b.lastLatency || 9999;
+      return latA - latB;
+    });
+
     const pool = [];
-    for (let k = 0; k < SERVERS.length; k++) {
-      pool.push(SERVERS[(serverIndex + k) % SERVERS.length]);
+    for (let k = 0; k < sortedPool.length; k++) {
+      pool.push(sortedPool[(serverIndex + k) % sortedPool.length]);
     }
     while (pool.length) {
       const batch = pool.splice(0, raceCount);
-      const results = await Promise.all(batch.map(s => fetchWorker(s, text, voice, rate, 3500)));
-      for (let idx = 0; idx < results.length; idx++) {
-        if (results[idx]) {
-          serverIndex = (serverIndex + idx) % SERVERS.length;
-          return results[idx];
-        }
+      const res = await raceBatchFast(batch, text, voice, rate, 3500);
+      if (res && res.blob) {
+        const foundServer = batch[res.serverIndexInBatch];
+        const realIdx = SERVERS.indexOf(foundServer);
+        if (realIdx !== -1) serverIndex = realIdx;
+        return res.blob;
       }
     }
     return null;
@@ -362,7 +407,7 @@
   // state.cache (xem getChunkBlob()) đã gắn theo ĐÚNG chỉ số chunk ngay từ
   // đầu nên kết quả tự động "nối" đúng vào vị trí của nó, không cần logic
   // ghép nối gì thêm.
-  const TIKTOK_MAX_CHUNK_DELAY_MS = 3000;
+  const TIKTOK_MAX_CHUNK_DELAY_MS = 1500;
   let tiktokActive = 0;      // số task đang chạy thật sự (dùng chung + tạm)
   let tiktokExtraSlots = 0;  // số "vé" vượt rào đã cấp do delay, trả lại khi task chậm xong
   const tiktokQueue = [];
@@ -445,8 +490,8 @@
   }
 
   // Độ sâu prefetch (số chunk kế tiếp bắn trước) — riêng cho giọng TikTok
-  const PREFETCH_DEPTH = 5;
-  const TIKTOK_PREFETCH_DEPTH = 10;
+  const PREFETCH_DEPTH = 8;
+  const TIKTOK_PREFETCH_DEPTH = 12;
   function prefetchDepthForVoice(voiceId) {
     return VOICE_ENGINE.get(voiceId) === 'tiktok' ? TIKTOK_PREFETCH_DEPTH : PREFETCH_DEPTH;
   }
@@ -951,7 +996,7 @@
     return el ? el.innerText.trim() : '';
   }
 
-  const PREFETCH_CONCURRENCY = 2;
+  const PREFETCH_CONCURRENCY = 4;
   let activePrefetches = 0;
   const prefetchQueue = [];
 
@@ -998,12 +1043,12 @@
     activePrefetches = 0;
   }
 
-  async function synthesizeWithRetry(text, voice, rate, raceCount = 4, maxRetries = 2) {
+  async function synthesizeWithRetry(text, voice, rate, raceCount = 4, maxRetries = 3) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const blob = await synthesize(text, voice, rate, raceCount);
       if (blob) return blob;
       if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
       }
     }
     return null;
@@ -1909,12 +1954,49 @@
     } catch (_) { /* im lặng bỏ qua nếu không định vị được */ }
   }
 
-  // ─── Single Reusable Audio Element & MediaSession Helpers ─────────────────
-  function getAudioElement() {
-    if (!state.audioEl) {
-      state.audioEl = new Audio();
+  // ─── Dual Audio Double Buffering Engine ──────────────────────────────
+  let audioPlayers = [null, null];
+  let activeAudioIdx = 0;
+  let preloadedChunkIdx = -1;
+
+  function initAudioPlayers() {
+    if (!audioPlayers[0]) {
+      audioPlayers[0] = new Audio();
+      audioPlayers[1] = new Audio();
+      audioPlayers[0].preload = 'auto';
+      audioPlayers[1].preload = 'auto';
     }
-    return state.audioEl;
+    return audioPlayers;
+  }
+
+  function getActiveAudio() {
+    initAudioPlayers();
+    return audioPlayers[activeAudioIdx];
+  }
+
+  function getStandbyAudio() {
+    initAudioPlayers();
+    return audioPlayers[1 - activeAudioIdx];
+  }
+
+  // Compatible getter for state.audioEl
+  Object.defineProperty(state, 'audioEl', {
+    get() {
+      return getActiveAudio();
+    },
+    set(val) {
+      if (val === null) {
+        if (audioPlayers[0]) silenceAudio(audioPlayers[0]);
+        if (audioPlayers[1]) silenceAudio(audioPlayers[1]);
+        preloadedChunkIdx = -1;
+      }
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  function getAudioElement() {
+    return getActiveAudio();
   }
 
   async function tryMergeFullChapterAudio(myToken) {
@@ -1975,15 +2057,16 @@
   }
 
   function seekAudioRelative(seconds) {
-    if (!state.audioEl) return;
-    const cur = state.audioEl.currentTime || 0;
-    const dur = state.audioEl.duration || 0;
+    const curAudio = getActiveAudio();
+    if (!curAudio) return;
+    const cur = curAudio.currentTime || 0;
+    const dur = curAudio.duration || 0;
     let target = cur + seconds;
     if (target < 0) {
       if (state.idx > 0) {
         playChunk(state.idx - 1, true);
       } else {
-        state.audioEl.currentTime = 0;
+        curAudio.currentTime = 0;
         updatePositionState();
       }
     } else if (dur > 0 && target >= dur) {
@@ -1993,20 +2076,21 @@
         playNextChapter();
       }
     } else {
-      state.audioEl.currentTime = target;
+      curAudio.currentTime = target;
       updatePositionState();
     }
   }
 
   function updatePositionState() {
-    if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && state.audioEl) {
+    const curAudio = getActiveAudio();
+    if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && curAudio) {
       try {
-        const dur = state.audioEl.duration;
-        const pos = state.audioEl.currentTime;
+        const dur = curAudio.duration;
+        const pos = curAudio.currentTime;
         if (!isNaN(dur) && !isNaN(pos) && dur > 0) {
           navigator.mediaSession.setPositionState({
             duration: dur,
-            playbackRate: state.audioEl.playbackRate || 1,
+            playbackRate: curAudio.playbackRate || 1,
             position: Math.min(pos, dur)
           });
         }
@@ -2029,7 +2113,13 @@
     updateChunkUI();
     scrollToChunk(i, forceScroll);
     const myToken = state.token;
-    setUIState('loading');
+
+    // Fast path: Check if chunk i was ALREADY preloaded into standby player
+    const isPreloadedInStandby = (preloadedChunkIdx === i);
+
+    if (!isPreloadedInStandby) {
+      setUIState('loading');
+    }
 
     const blob = await getChunkBlob(i);
     if (myToken !== state.token) return;
@@ -2042,27 +2132,36 @@
         stopReading('Mất kết nối mạng (hoặc lỗi tổng hợp giọng đọc liên tục), đã dừng đọc.');
         return;
       }
-      setStatus('Lỗi tổng hợp giọng đọc, bỏ qua đoạn này…');
+      setStatus('Lỗi tổng hợp giọng đọc, đang tự chuyển đoạn tiếp theo…');
       return playChunk(i + 1);
     }
 
     state.consecutiveFailures = 0;
     saveResumePoint();
 
-    // Re-use single Audio element to bypass mobile browser autoplay blocks
-    const audio = getAudioElement();
+    initAudioPlayers();
 
-    if (audio.src && audio.src.startsWith('blob:')) {
-      try { URL.revokeObjectURL(audio.src); } catch (_) {}
+    // Pause standby audio if it was playing previously
+    const standby = getStandbyAudio();
+    try { standby.pause(); } catch (_) {}
+
+    // Switch active player if preloaded in standby
+    if (isPreloadedInStandby) {
+      activeAudioIdx = 1 - activeAudioIdx;
+      preloadedChunkIdx = -1;
     }
 
-    audio.onended = null;
-    audio.onerror = null;
-    audio.ontimeupdate = null;
-    audio.onloadedmetadata = null;
+    const audio = getActiveAudio();
 
-    const blobUrl = URL.createObjectURL(blob);
-    audio.src = blobUrl;
+    if (!isPreloadedInStandby) {
+      if (audio.src && audio.src.startsWith('blob:')) {
+        try { URL.revokeObjectURL(audio.src); } catch (_) {}
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      audio.src = blobUrl;
+      audio.load();
+    }
+
     audio.volume = state.volume;
     try {
       audio.defaultPlaybackRate = state.speed;
@@ -2075,6 +2174,29 @@
       } catch (_) {}
     };
 
+    let transitionDone = false;
+    const triggerNextChunk = () => {
+      if (transitionDone || myToken !== state.token) return;
+      transitionDone = true;
+      playChunk(i + 1);
+    };
+
+    audio.onended = triggerNextChunk;
+    audio.onerror = () => {
+      if (myToken === state.token && !transitionDone) {
+        transitionDone = true;
+        playChunk(i + 1);
+      }
+    };
+
+    audio.ontimeupdate = () => {
+      if (myToken !== state.token) return;
+      updatePositionState();
+      if (audio.duration > 0 && audio.currentTime >= audio.duration - 0.06) {
+        triggerNextChunk();
+      }
+    };
+
     if ('mediaSession' in navigator) {
       try {
         const chapTitle = (typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) ? S.chapters[S.cur].title : '';
@@ -2085,23 +2207,6 @@
         });
       } catch (_) {}
     }
-
-    audio.ontimeupdate = () => {
-      if (myToken !== state.token) return;
-      updatePositionState();
-    };
-
-    audio.onended = () => {
-      if (myToken === state.token) {
-        playChunk(i + 1);
-      }
-    };
-
-    audio.onerror = () => {
-      if (myToken === state.token) {
-        playChunk(i + 1);
-      }
-    };
 
     const playPromise = audio.play();
     if (playPromise && playPromise.catch) {
@@ -2117,7 +2222,7 @@
             setUIState('paused');
             setStatus('Tạm dừng (Bấm nút Phát để tiếp tục nghe).');
           } else {
-            playChunk(i + 1);
+            triggerNextChunk();
           }
         }
       });
@@ -2128,6 +2233,27 @@
     syncBgmWithTts();
 
     prefetchWindow(i);
+
+    // GAPLESS DOUBLE-BUFFER PRE-LOADING FOR CHUNK (i + 1)
+    const nextIdx = i + 1;
+    if (nextIdx < state.chunks.length) {
+      getChunkBlob(nextIdx).then(nextBlob => {
+        if (myToken !== state.token || !nextBlob || nextBlob === EMPTY_CHUNK) return;
+        const targetStandby = getStandbyAudio();
+        if (targetStandby.src && targetStandby.src.startsWith('blob:')) {
+          try { URL.revokeObjectURL(targetStandby.src); } catch (_) {}
+        }
+        const standbyUrl = URL.createObjectURL(nextBlob);
+        targetStandby.src = standbyUrl;
+        targetStandby.volume = state.volume;
+        try {
+          targetStandby.defaultPlaybackRate = state.speed;
+          targetStandby.playbackRate = state.speed;
+        } catch (_) {}
+        targetStandby.load();
+        preloadedChunkIdx = nextIdx;
+      }).catch(() => {});
+    }
 
     if (state.autoNext && state.fullChapter && i === Math.max(0, state.chunks.length - 3)) {
       prepareNextChapter();
