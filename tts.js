@@ -99,17 +99,17 @@
   // ─── Cloudflare Workers ───────
   const SERVERS = [
     { url: 'https://edge-tts1.lilbabyfroggie.workers.dev/tts', type: 'auto' },
-    { url: 'https://egde-tts2.quangnguyen251325.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts3.hoannguyen251325.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts4.manhnguyen251325.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts5.thienco-tcc.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts6.odes-agency.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts7.thiencocac-tradecoin.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts8.baileyserena1161.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts9.leroyswanson351.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts10.peayhoward.workers.dev/tts', type: 'auto' },
-    { url: 'https://msedge-tts-json.nickmonty777.workers.dev/tts-json', type: 'json' },
     { url: 'https://msedge-tts-json.nickmonty2020.workers.dev/tts-json', type: 'json' },
+    { url: 'https://egde-tts2.quangnguyen251325.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts6.odes-agency.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts9.leroyswanson351.workers.dev/tts', type: 'auto' },
+    { url: 'https://msedge-tts-json.nickmonty777.workers.dev/tts-json', type: 'json' },
   ];
   function b64ToBlob(b64) {
     const bin = atob(b64);
@@ -118,7 +118,7 @@
     return new Blob([bytes], { type: 'audio/mpeg' });
   }
   let serverIndex = 0;
-  async function fetchWorker(server, text, voice, rate, timeoutMs = 3500) {
+  async function fetchWorker(server, text, voice, rate, timeoutMs = 5000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -139,7 +139,7 @@
     } catch (e) { clearTimeout(timer); return null; }
   }
 
-  function raceBatchFast(batch, text, voice, rate, timeoutMs = 3500) {
+  function raceBatchFast(batch, text, voice, rate, timeoutMs = 5000) {
     return new Promise((resolve) => {
       let pending = batch.length;
       if (!pending) { resolve(null); return; }
@@ -906,6 +906,8 @@
     playingChaptersRef: null,
     playingSig: null,
     fullChapterBlob: null,
+    allBlocksReady: false,
+    isBuffering: false,
   };
 
   // ─── Nhạc nền (archive.org) ────────────────────────────────────────────
@@ -987,7 +989,7 @@
     return null;
   }
 
-  function splitChapterIntoBlocks(text, maxChars = 1100) {
+  function splitChapterIntoBlocks(text, maxChars = 520) {
     if (!text) return [];
     const sentences = splitIntoSentences(text);
     const blocks = [];
@@ -1006,13 +1008,29 @@
     return blocks;
   }
 
-  async function synthesizeBlocksParallel(blocks, myToken, onProgress, onFirstChunkReady) {
+  async function synthesizeBlocksParallel(blocks, myToken, onProgress, onStreamUpdate) {
     const n = blocks.length;
     const blobs = new Array(n).fill(null);
     let completed = 0;
     const isTikTok = VOICE_ENGINE.get(state.voice) === 'tiktok';
-    const concurrency = isTikTok ? 1 : Math.min(10, n);
+    const concurrency = isTikTok ? 1 : Math.min(8, n);
     let queueIdx = 0;
+    let highestContiguous = 0;
+
+    function checkContiguousAndStream() {
+      let contiguous = 0;
+      while (contiguous < n && blobs[contiguous]) {
+        contiguous++;
+      }
+      if (contiguous > highestContiguous && typeof onStreamUpdate === 'function') {
+        highestContiguous = contiguous;
+        try {
+          const contiguousBlobs = blobs.slice(0, contiguous);
+          const partialBlob = new Blob(contiguousBlobs, { type: 'audio/mpeg' });
+          onStreamUpdate(partialBlob, contiguous, n);
+        } catch (_) {}
+      }
+    }
 
     async function worker() {
       while (queueIdx < n) {
@@ -1021,8 +1039,10 @@
         const blockText = blocks[i];
         const speechText = sanitizeText(preprocessNumbersForTTS(blockText));
         if (!speechText.trim()) {
+          blobs[i] = new Blob([], { type: 'audio/mpeg' });
           completed++;
           if (onProgress) onProgress(completed, n);
+          checkContiguousAndStream();
           continue;
         }
 
@@ -1031,10 +1051,8 @@
         if (myToken !== state.token) return;
         blobs[i] = blob;
         completed++;
-        if (i === 0 && blob && typeof onFirstChunkReady === 'function') {
-          try { onFirstChunkReady(blob); } catch (_) {}
-        }
         if (onProgress) onProgress(completed, n);
+        checkContiguousAndStream();
       }
     }
 
@@ -2096,20 +2114,58 @@
     if (ui.progressBar) ui.progressBar.style.width = '5%';
     if (ui.timeDisplay) ui.timeDisplay.textContent = '00:00 / 00:00';
 
-    const blocks = splitChapterIntoBlocks(text, 1100);
+    state.allBlocksReady = false;
+    state.isBuffering = false;
+
+    const blocks = splitChapterIntoBlocks(text, 520);
     if (!blocks.length) {
       hideLoadingBanner();
       stopReading('Không có nội dung để đọc.');
       return;
     }
 
-    let firstChunkPlaying = false;
-    const onFirstChunk = (blob0) => {
+    let playbackStarted = false;
+    const onStreamUpdate = (partialBlob, readyCount, totalCount) => {
       if (myToken !== state.token) return;
-      if (forceResumeTime <= 0) {
-        firstChunkPlaying = true;
-        playPreparedBlob(blob0, myToken, 0);
-        showLoadingBanner(`Đang phát đoạn đầu • Tải ngầm các đoạn còn lại (1/${blocks.length})...`, Math.round((1 / blocks.length) * 100));
+
+      const shouldStartNow = !playbackStarted && (
+        readyCount >= 2 ||
+        readyCount === totalCount ||
+        totalCount === 1 ||
+        (forceResumeTime > 0 && readyCount >= 3)
+      );
+
+      if (shouldStartNow) {
+        playbackStarted = true;
+        playPreparedBlob(partialBlob, myToken, forceResumeTime);
+        const pct = Math.round((readyCount / totalCount) * 100);
+        showLoadingBanner(`Đang phát âm thanh • Nạp sẵn ${readyCount}/${totalCount} đoạn (${pct}%)...`, pct);
+        return;
+      }
+
+      if (playbackStarted && chapterAudio) {
+        const curTime = chapterAudio.currentTime || 0;
+        const wasPaused = chapterAudio.paused && !state.isBuffering;
+        const audio = getChapterAudio();
+        const oldSrc = audio.src;
+        audio.src = URL.createObjectURL(partialBlob);
+        if (oldSrc && oldSrc.startsWith('blob:')) {
+          try { URL.revokeObjectURL(oldSrc); } catch (_) {}
+        }
+        applySpeedToAudio(audio, state.speed);
+        if (curTime > 0) {
+          try { audio.currentTime = curTime; } catch (_) {}
+        }
+        if (!wasPaused || state.isBuffering) {
+          state.isBuffering = false;
+          audio.play().catch(() => {});
+          state.playing = true;
+          setUIState('playing');
+        }
+        const pct = Math.round((readyCount / totalCount) * 100);
+        if (readyCount < totalCount) {
+          showLoadingBanner(`Đang phát âm thanh • Nạp sẵn ${readyCount}/${totalCount} đoạn (${pct}%)...`, pct);
+        }
       }
     };
 
@@ -2117,12 +2173,12 @@
       if (myToken !== state.token) return;
       const pct = Math.round((done / total) * 100);
       if (ui.progressBar) ui.progressBar.style.width = pct + '%';
-      const msg = firstChunkPlaying
-        ? `Đang phát đoạn đầu • Tải ngầm ${done}/${total} đoạn (${pct}%)`
-        : `Đang tải âm thanh: ${done}/${total} đoạn (${pct}%)`;
+      const msg = playbackStarted
+        ? `Đang phát âm thanh • Nạp sẵn ${done}/${total} đoạn (${pct}%)`
+        : `Đang kết nối & nạp âm thanh (${done}/${total} đoạn)...`;
       showLoadingBanner(msg, pct);
       setStatus(msg);
-    }, onFirstChunk);
+    }, onStreamUpdate);
 
     if (myToken !== state.token) {
       hideLoadingBanner();
@@ -2134,10 +2190,13 @@
       return;
     }
 
+    state.allBlocksReady = true;
+    state.isBuffering = false;
     state.fullChapterBlob = fullBlob;
 
-    if (firstChunkPlaying && chapterAudio && !chapterAudio.paused) {
+    if (playbackStarted && chapterAudio) {
       const curTime = chapterAudio.currentTime || 0;
+      const wasPaused = chapterAudio.paused;
       const audio = getChapterAudio();
       const oldSrc = audio.src;
       audio.src = URL.createObjectURL(fullBlob);
@@ -2148,13 +2207,17 @@
       if (curTime > 0) {
         try { audio.currentTime = curTime; } catch (_) {}
       }
-      audio.play().catch(() => {});
+      if (!wasPaused) {
+        audio.play().catch(() => {});
+        state.playing = true;
+        setUIState('playing');
+      }
       showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-      setTimeout(hideLoadingBanner, 1000);
+      setTimeout(hideLoadingBanner, 1200);
     } else {
       playPreparedBlob(fullBlob, myToken, forceResumeTime);
       showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-      setTimeout(hideLoadingBanner, 1000);
+      setTimeout(hideLoadingBanner, 1200);
     }
   }
 
@@ -2176,7 +2239,7 @@
     setUIState('loading');
     setStatus('Đang tải âm thanh chương kế (nền)…');
 
-    const blocks = splitChapterIntoBlocks(text, 1100);
+    const blocks = splitChapterIntoBlocks(text, 520);
     if (!blocks.length) {
       stopReading('Không có nội dung để đọc.');
       return;
@@ -2188,6 +2251,7 @@
         stopReading('Lỗi tổng hợp giọng đọc chương kế.');
         return;
       }
+      state.allBlocksReady = true;
       state.fullChapterBlob = fullBlob;
       playPreparedBlob(fullBlob, myToken, 0);
     }).catch(() => {
@@ -2216,7 +2280,7 @@
         clearInterval(poll);
         const raw = S.translations[ni] || ch.content;
         const text = cleanCensorChars(applyReplace(stripTitle(raw, ch.title)));
-        const blocks = splitChapterIntoBlocks(text, 1100);
+        const blocks = splitChapterIntoBlocks(text, 520);
         if (!blocks.length) { prep.failed = true; return; }
         synthesizeBlocksParallel(blocks, myToken, null).then((blob) => {
           if (myToken !== state.token || state.nextChap !== prep) return;
@@ -2329,6 +2393,17 @@
       stopReading('Đã đọc xong văn bản.');
       return;
     }
+
+    // Nếu chưa tải xong toàn bộ các đoạn của chương (mạng chậm, audio phát chạm đuôi buffer tạm):
+    // TUYỆT ĐỐI KHÔNG DỪNG ĐỌC VÀ KHÔNG NHẢY CHƯƠNG!
+    if (!state.allBlocksReady) {
+      state.isBuffering = true;
+      state.playing = true;
+      setUIState('loading');
+      showLoadingBanner('Đang nạp tiếp âm thanh, vui lòng chờ trong giây lát...', 85);
+      return;
+    }
+
     clearResumePoint();
     if (state.autoNext) {
       await finishChapterAutoNext();
@@ -2342,6 +2417,8 @@
 
   function stopReading(msg) {
     state.token++;
+    state.allBlocksReady = false;
+    state.isBuffering = false;
     if (chapterAudio) {
       try {
         chapterAudio.pause();
@@ -2538,6 +2615,8 @@
     if (h > 0) document.documentElement.style.setProperty('--tts-bar-h', h + 'px');
   }
 
+  window._ttsState = state;
+  window._ttsAudio = () => getChapterAudio();
   window.toggleTtsReader = function () {
     if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
     if (!ui) buildUI();
