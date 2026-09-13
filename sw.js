@@ -12,7 +12,7 @@
 // bản dịch, tiến độ đọc, cài đặt của người dùng lưu ở localStorage nên không bị ảnh hưởng
 // dù cache có bị xoá/đổi tên.
 
-const CACHE_NAME = 'truyendichai-shell-v15';
+const CACHE_NAME = 'truyendichai-shell-v16';
 const APP_SHELL = [
   '/',
   '/index.html',
