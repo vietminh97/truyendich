@@ -1506,8 +1506,8 @@
       ui.speedBtns.forEach(b => b.classList.toggle('on', parseFloat(b.dataset.mult) === mult));
       localStorage.setItem('tts_speed', mult);
       if (typeof applySpeedToAudio === 'function') {
-        if (audioPlayers[0]) applySpeedToAudio(audioPlayers[0], mult);
-        if (audioPlayers[1]) applySpeedToAudio(audioPlayers[1], mult);
+        const cur = getActiveAudio();
+        if (cur && state.playing) applySpeedToAudio(cur, mult);
       }
       updatePositionState();
     }
@@ -1962,6 +1962,7 @@
   function createAudioPlayer() {
     const a = new Audio();
     a.preload = 'auto';
+    a.autoplay = false;
     a.preservesPitch = true;
     a.mozPreservesPitch = true;
     a.webkitPreservesPitch = true;
@@ -2131,18 +2132,50 @@
     initAudioPlayers();
     stopTransitionMonitor();
 
+    // Check if chunk i was preloaded into standby player
+    const isPreloadedInStandby = (preloadedChunkIdx === i);
+    preloadedChunkIdx = -1;
+
     // Previous active audio
     const prevAudio = getActiveAudio();
 
     // Swap active player if preloaded in standby
     if (isPreloadedInStandby) {
       activeAudioIdx = 1 - activeAudioIdx;
-      preloadedChunkIdx = -1;
     }
 
     const audio = getActiveAudio();
 
+    // Stop and silence the previous player completely so it can NEVER overlap or replay
+    if (prevAudio && prevAudio !== audio) {
+      try {
+        prevAudio.pause();
+        prevAudio.onended = null;
+        prevAudio.onerror = null;
+        if (prevAudio.src && prevAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(prevAudio.src);
+        }
+        prevAudio.removeAttribute('src');
+        prevAudio.load();
+      } catch (_) {}
+    }
+
     if (!isPreloadedInStandby) {
+      // Clear standby player if not preloaded to ensure no lingering audio
+      const standbyAudio = getStandbyAudio();
+      if (standbyAudio && standbyAudio !== audio) {
+        try {
+          standbyAudio.pause();
+          standbyAudio.onended = null;
+          standbyAudio.onerror = null;
+          if (standbyAudio.src && standbyAudio.src.startsWith('blob:')) {
+            URL.revokeObjectURL(standbyAudio.src);
+          }
+          standbyAudio.removeAttribute('src');
+          standbyAudio.load();
+        } catch (_) {}
+      }
+
       if (audio.src && audio.src.startsWith('blob:')) {
         try { URL.revokeObjectURL(audio.src); } catch (_) {}
       }
@@ -2175,14 +2208,6 @@
       }
     };
 
-    // Pause old player when the new one begins
-    if (isPreloadedInStandby && prevAudio && prevAudio !== audio) {
-      try {
-        prevAudio.pause();
-        prevAudio.currentTime = 0;
-      } catch (_) {}
-    }
-
     // Call .play() IMMEDIATELY to avoid audio latency
     const playPromise = audio.play();
     if (playPromise && playPromise.catch) {
@@ -2209,10 +2234,8 @@
     syncBgmWithTts();
 
     // High-precision transition monitor (runs every 20ms)
-    // Edge/TikTok TTS MP3s have ~100-140ms trailing silence. By starting the standby player
-    // slightly before the physical end of file, the leading silence of chunk i+1 overlaps
-    // the trailing silence of chunk i.
-    // Result: 0ms silence gap, perfectly continuous voice flow, AND preserves pitch at 2x!
+    // Starts the next chunk smoothly right before file ends (~30ms) to ensure
+    // zero audio latency / gapless playback without voice overlap.
     transitionMonitorTimer = setInterval(() => {
       if (myToken !== state.token || !state.playing) {
         stopTransitionMonitor();
@@ -2223,9 +2246,8 @@
 
       const dur = audio.duration;
       const cur = audio.currentTime;
-      if (dur > 0.4) {
-        const overlapOffset = Math.min(0.18, 0.12 / Math.max(0.5, state.speed));
-        if (cur >= dur - overlapOffset) {
+      if (dur > 0.3) {
+        if (cur >= dur - 0.03) {
           transitionDone = true;
           stopTransitionMonitor();
           playChunk(i + 1);
@@ -2245,7 +2267,6 @@
         const standbyUrl = URL.createObjectURL(nextBlob);
         targetStandby.src = standbyUrl;
         targetStandby.volume = state.volume;
-        applySpeedToAudio(targetStandby, state.speed);
         targetStandby.load();
         preloadedChunkIdx = nextIdx;
       }).catch(() => {});
@@ -2687,9 +2708,9 @@
 
   function onPauseClick() {
     if (state.playing) {
-      const cur = getActiveAudio();
-      if (cur) cur.pause();
       stopTransitionMonitor();
+      if (audioPlayers[0]) audioPlayers[0].pause();
+      if (audioPlayers[1]) audioPlayers[1].pause();
       state.playing = false;
       setUIState('paused');
       syncBgmWithTts();
