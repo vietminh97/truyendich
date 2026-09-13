@@ -32,12 +32,12 @@
   z-index: 800;
   display: flex;
   justify-content: center;
-  padding: 0 16px 21px;
+  padding: 0 16px calc(18px + env(safe-area-inset-bottom, 0px));
   pointer-events: none; /* vùng đệm trong suốt không chặn click nội dung phía dưới */
 }
 #tts-root > * { pointer-events: auto; }
 
-.tts-bar-outer { position: relative; width: 100%; max-width: 770px; }
+.tts-bar-outer { position: relative; width: 100%; max-width: min(940px, calc(100vw - 24px)); }
 
 .tts-bar {
   position: relative;
@@ -45,10 +45,10 @@
   backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--tts-bd);
   border-radius: 20px;
-  padding: 11px 12px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   box-shadow: 0 14px 34px rgba(0,0,0,.4);
   overflow: hidden; /* để .tts-prog bị cắt khít theo đúng góc bo tròn của thanh, thay vì nổi thành viên "thuốc" lơ lửng */
 }
@@ -179,8 +179,8 @@
 .tts-speed-wrap::-webkit-scrollbar { display: none; }
 .tts-spd {
   all: unset; box-sizing: border-box; cursor: pointer;
-  font-size: 12px; font-weight: 600; color: var(--tts-txt2);
-  width: 50px; flex-shrink: 0; padding: 8px 0; border-radius: 8px;
+  font-size: 11.5px; font-weight: 600; color: var(--tts-txt2);
+  width: 44px; flex-shrink: 0; padding: 7px 0; border-radius: 8px;
   text-align: center; white-space: nowrap; transition: color .15s, background .15s;
 }
 .tts-spd:hover { color: var(--tts-txt); background: rgba(255,255,255,.06); }
@@ -227,20 +227,14 @@ input[type="range"].tts-vol-slider::-moz-range-thumb { width: 12px; height: 12px
    BẢNG CÀI ĐẶT (popover, neo dưới nút bánh răng)
 ============================================================ */
 .tts-settings {
-  /* Neo ở #tts-bar-outer (không còn lồng trong .tts-bar/.tts-right nữa) —
-     cách cạnh trên của .tts-bar một khoảng nhỏ (8px). z-index âm để popup
-     luôn nằm DƯỚI lớp .tts-bar trong thứ tự vẽ — bóng đổ (box-shadow) của
-     popup có bán kính lan rộng hơn khoảng hở 8px này, nên nếu không hạ lớp
-     xuống dưới, phần bóng tràn ra sẽ đè lên mặt kính của audio bar. */
-  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: -1;
-  width: 320px; max-width: 86vw;
-  /* Nền kính mờ giống hệt audio bar (.tts-bar) thay vì tối/đục hơn như trước */
-  background: var(--tts-bg2);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 100;
+  width: 320px; max-width: calc(100vw - 24px);
+  background: var(--tts-bg3);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--tts-bd);
   border-radius: 16px;
   padding: 14px;
-  box-shadow: 0 14px 34px rgba(0,0,0,.4);
+  box-shadow: 0 16px 36px rgba(0,0,0,.5);
   display: flex; flex-direction: column;
   opacity: 0; transform: translateY(6px) scale(.98); pointer-events: none;
   transition: opacity .16s ease, transform .16s ease;
@@ -373,28 +367,93 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 13p
 input[type="range"]::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: #fff; border: none; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
 
 /* ============================================================
-   CHẾ ĐỘ MOBILE — thanh chia 2 dòng
+   CHẾ ĐỘ TABLET & MOBILE
 ============================================================ */
+@media (max-width: 840px) and (min-width: 621px) {
+  .tts-vol-wrap { display: none; }
+  .tts-set-volume { display: block; }
+  .tts-divider { display: none; }
+  .tts-spd { width: 38px; font-size: 11px; }
+}
+
 @media (max-width: 620px) {
-  #tts-root { padding: 0 10px 17px; }
-  .tts-bar { flex-wrap: wrap; padding: 12px 10px 8px; row-gap: 8px; }
+  #tts-root { padding: 0 8px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .tts-bar {
+    flex-wrap: wrap;
+    padding: 10px 8px 7px;
+    row-gap: 6px;
+    column-gap: 4px;
+    border-radius: 16px;
+  }
   .tts-divider { display: none; }
 
-  /* dòng 1: transport bên trái → thời gian → icon trạng thái → cài đặt/đóng sát mép phải */
+  /* dòng 1: transport bên trái → thời gian & trạng thái ở giữa → cài đặt/đóng sát mép phải */
   .tts-transport { order: 1; flex-shrink: 0; gap: 2px; }
   .tts-transport .tts-tbtn { width: 28px; height: 28px; }
   .tts-transport .tts-tbtn-play { width: 36px; height: 36px; }
-  .tts-time-wrap { order: 2; flex: 1 1 auto; margin-left: 2px; }
-  .tts-time { font-size: 10px; }
-  .tts-status-row { order: 3; flex-shrink: 0; margin-left: 0; margin-right: 4px; }
+
+  .tts-time-wrap {
+    order: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tts-time { font-size: 10px; white-space: nowrap; letter-spacing: 0; }
+
+  .tts-status-row {
+    order: 3;
+    flex-shrink: 0;
+    margin: 0 2px 0 0;
+  }
+  .tts-status-row .tts-dot svg { width: 13px; height: 13px; }
+
   .tts-vol-wrap { display: none; }
-  .tts-right { order: 4; margin-left: 0; flex-shrink: 0; }
+  .tts-set-volume { display: block; }
+
+  .tts-right {
+    order: 4;
+    margin-left: auto;
+    flex-shrink: 0;
+    gap: 2px;
+  }
+  .tts-right .tts-tbtn { width: 28px; height: 28px; }
 
   /* dòng 2: cụm tốc độ — xuống dòng riêng, các nút chia đều hết chiều ngang */
-  .tts-speed-wrap { order: 5; width: 100%; padding-top: 6px; border-top: 1px solid var(--tts-bd); overflow-x: visible; }
-  .tts-speed-wrap .tts-spd { flex: 1 1 0; text-align: center; padding-left: 2px; padding-right: 2px; font-size: 11px; }
+  .tts-speed-wrap {
+    order: 5;
+    width: 100%;
+    padding-top: 6px;
+    border-top: 1px solid var(--tts-bd);
+    display: flex;
+    gap: 2px;
+    overflow-x: visible;
+  }
+  .tts-speed-wrap .tts-spd {
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+    padding: 6px 0;
+    font-size: 11px;
+    text-align: center;
+    border-radius: 6px;
+  }
 
-  .tts-settings { right: -4px; }
+  .tts-settings { right: 0; max-width: calc(100vw - 16px); }
+}
+
+@media (max-width: 375px) {
+  .tts-bar { padding: 9px 6px 6px; row-gap: 5px; }
+  .tts-transport .tts-tbtn { width: 25px; height: 25px; }
+  .tts-transport .tts-tbtn svg { width: 14px; height: 14px; }
+  .tts-transport .tts-tbtn-play { width: 32px; height: 32px; }
+  .tts-transport .tts-tbtn-play svg { width: 14px; height: 14px; }
+  .tts-time { font-size: 9px; }
+  .tts-right .tts-tbtn { width: 25px; height: 25px; }
+  .tts-right .tts-tbtn svg { width: 13px; height: 13px; }
+  .tts-speed-wrap .tts-spd { font-size: 10px; padding: 5px 0; }
 }
 
 /* ── Nút nổi "Nghe" ở lề phải (giống extension) ── */

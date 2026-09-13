@@ -98,8 +98,6 @@
 
   // ─── Cloudflare Workers ───────
   const SERVERS = [
-    { url: 'https://msedge-tts-json.nickmonty777.workers.dev/tts-json', type: 'json' },
-    { url: 'https://msedge-tts-json.nickmonty2020.workers.dev/tts-json', type: 'json' },
     { url: 'https://edge-tts1.lilbabyfroggie.workers.dev/tts', type: 'auto' },
     { url: 'https://egde-tts2.quangnguyen251325.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts3.hoannguyen251325.workers.dev/tts', type: 'auto' },
@@ -110,6 +108,8 @@
     { url: 'https://edge-tts8.baileyserena1161.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts9.leroyswanson351.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts10.peayhoward.workers.dev/tts', type: 'auto' },
+    { url: 'https://msedge-tts-json.nickmonty777.workers.dev/tts-json', type: 'json' },
+    { url: 'https://msedge-tts-json.nickmonty2020.workers.dev/tts-json', type: 'json' },
   ];
   function b64ToBlob(b64) {
     const bin = atob(b64);
@@ -958,7 +958,22 @@
 
   function getCurrentText() {
     const el = document.querySelector('#chContent .reading-content');
-    return el ? el.innerText.trim() : '';
+    if (el && el.innerText.trim()) return el.innerText.trim();
+    const cc = document.getElementById('chContent');
+    if (cc && !cc.querySelector('.reading-ph')) {
+      const t = cc.innerText.trim();
+      if (t) return t;
+    }
+    if (typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) {
+      const ch = S.chapters[S.cur];
+      const raw = (S.translations && S.translations[S.cur]) ? S.translations[S.cur] : ch.content;
+      if (raw) {
+        return (typeof cleanCensorChars === 'function' && typeof applyReplace === 'function' && typeof stripTitle === 'function')
+          ? cleanCensorChars(applyReplace(stripTitle(raw, ch.title)))
+          : raw.trim();
+      }
+    }
+    return '';
   }
 
   async function synthesizeWithRetry(text, voice, rate, raceCount = 4, maxRetries = 3) {
@@ -1109,8 +1124,6 @@
                 <span class="tts-switch-thumb"></span>
               </span>
             </label>
-          </div>
-
           </div>
         </div>
 
@@ -1826,6 +1839,7 @@
     if (typeof S !== 'undefined' && S.chapters) {
       const curChap = state.playingCur != null ? state.playingCur : S.cur;
       if (curChap < S.chapters.length - 1) {
+        if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
         if (typeof nav === 'function') nav(curChap + 1);
         setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 250);
       }
@@ -1836,6 +1850,7 @@
     if (typeof S !== 'undefined' && S.chapters) {
       const curChap = state.playingCur != null ? state.playingCur : S.cur;
       if (curChap > 0) {
+        if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
         if (typeof nav === 'function') nav(curChap - 1);
         setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 250);
       }
@@ -1937,6 +1952,7 @@
     if (!saved || !saved.time) return;
     const fullText = getCurrentText();
     if (!fullText) return;
+    if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
     startReading(fullText, true, saved.time);
   }
 
@@ -1967,37 +1983,45 @@
   watchExternalChapterChange();
 
   function playPreparedBlob(blob, myToken, resumeTime = 0) {
+    if (myToken !== state.token) return;
     const audio = getChapterAudio();
-    if (audio.src && audio.src.startsWith('blob:')) {
-      URL.revokeObjectURL(audio.src);
+    const oldSrc = audio.src;
+    const blobUrl = URL.createObjectURL(blob);
+    audio.src = blobUrl;
+    if (oldSrc && oldSrc.startsWith('blob:')) {
+      try { URL.revokeObjectURL(oldSrc); } catch (_) {}
     }
-    audio.src = URL.createObjectURL(blob);
     audio.volume = state.volume;
     applySpeedToAudio(audio, state.speed);
-    audio.oncanplay = () => {
+    if (resumeTime > 0) {
+      try { audio.currentTime = resumeTime; } catch (_) {}
+    }
+
+    function doPlay() {
       if (myToken !== state.token) return;
-      audio.oncanplay = null;
       applySpeedToAudio(audio, state.speed);
-      if (resumeTime > 0 && resumeTime < (audio.duration || 99999)) {
-        audio.currentTime = resumeTime;
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          if (myToken === state.token) {
+            applySpeedToAudio(audio, state.speed);
+            state.playing = true;
+            setUIState('playing');
+            syncBgmWithTts();
+            updateMediaSession();
+          }
+        }).catch((err) => {
+          console.warn('Play error:', err);
+          if (myToken === state.token) {
+            state.playing = false;
+            setUIState('paused');
+            setStatus('Chạm nút Phát để nghe');
+          }
+        });
       }
-      audio.play().then(() => {
-        if (myToken === state.token) {
-          applySpeedToAudio(audio, state.speed);
-          state.playing = true;
-          setUIState('playing');
-          syncBgmWithTts();
-          updateMediaSession();
-        }
-      }).catch((err) => {
-        console.warn('Play error:', err);
-        if (myToken === state.token) {
-          state.playing = false;
-          setUIState('paused');
-        }
-      });
-    };
-    audio.load();
+    }
+
+    doPlay();
   }
 
   async function startReading(text, fullChapter = true, forceResumeTime = 0) {
@@ -2012,8 +2036,6 @@
         if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
           URL.revokeObjectURL(chapterAudio.src);
         }
-        chapterAudio.removeAttribute('src');
-        chapterAudio.load();
       } catch (_) {}
     }
 
@@ -2061,8 +2083,6 @@
         if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
           URL.revokeObjectURL(chapterAudio.src);
         }
-        chapterAudio.removeAttribute('src');
-        chapterAudio.load();
       } catch (_) {}
     }
     state.nextChap = null;
@@ -2263,7 +2283,22 @@
     }
   }
 
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+  function primeAudioPlayback() {
+    try {
+      const a = getChapterAudio();
+      if (!state.playing) {
+        if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
+          a.src = SILENT_WAV;
+        }
+        const p = a.play();
+        if (p !== undefined) p.catch(() => {});
+      }
+    } catch (_) {}
+  }
+
   function onPlayClick() {
+    primeAudioPlayback();
     const text = getCurrentText();
     if (!text) { setStatus('Chưa có nội dung để đọc.'); return; }
     if (typeof window.showPlayTipOnce === 'function') window.showPlayTipOnce();
@@ -2286,6 +2321,7 @@
   }
 
   function onPlayPauseClick() {
+    primeAudioPlayback();
     if (state.uiState === 'idle') onPlayClick();
     else if (state.chapterDetached && (state.uiState === 'loading' || state.uiState === 'playing')) {
       stopReading('Đã dừng đọc.');
@@ -2416,6 +2452,7 @@
   }
 
   window.toggleTtsReader = function () {
+    if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
     if (!ui) buildUI();
     const willOpen = ui.root.style.display === 'none';
     ui.root.style.display = willOpen ? 'flex' : 'none';
@@ -2472,6 +2509,7 @@
   // đọc xong đoạn còn lại của chương.
   function readTextViaSelection(text, fullChapter = false) {
     if (!text) return;
+    if (typeof primeAudioPlayback === 'function') primeAudioPlayback();
     if (!ui || ui.root.style.display === 'none') window.toggleTtsReader();
     startReading(text, fullChapter);
   }
