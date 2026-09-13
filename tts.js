@@ -1081,6 +1081,19 @@
     await Promise.all(workers);
 
     if (isCancelled()) return null;
+
+    // Xả nốt phần chưa báo cho onSequentialBlock: nếu có khối tổng hợp lỗi hẳn
+    // (blob null) thì báo bằng khối RỖNG để nó không chặn vĩnh viễn các khối
+    // sau nó — bên phát sẽ bỏ qua khối rỗng và đọc tiếp, giống đúng cách blob
+    // gộp cuối cùng bỏ khối lỗi ở dưới (filter(Boolean)).
+    if (typeof onSequentialBlock === 'function') {
+      while (deliveredUpTo < n) {
+        const idx = deliveredUpTo++;
+        const b = blobs[idx] || new Blob([], { type: 'audio/mpeg' });
+        try { onSequentialBlock(b, idx, n); } catch (_) {}
+      }
+    }
+
     const validBlobs = blobs.filter(Boolean);
     if (!validBlobs.length) return null;
     return new Blob(validBlobs, { type: 'audio/mpeg' });
@@ -1465,7 +1478,8 @@
       state.speed = mult;
       ui.speedBtns.forEach(b => b.classList.toggle('on', parseFloat(b.dataset.mult) === mult));
       localStorage.setItem('tts_speed', mult);
-      if (chapterAudio && state.playing) applySpeedToAudio(chapterAudio, mult);
+      if (chainEngine) chainEngine.setSpeed(mult);
+      else if (chapterAudio && state.playing) applySpeedToAudio(chapterAudio, mult);
       updatePositionState();
     }
     ui.speedBtns.forEach(btn => btn.addEventListener('click', () => setSpeed(parseFloat(btn.dataset.mult))));
@@ -1506,6 +1520,7 @@
       ui.volumeNumPanel.textContent = value + '%';
       localStorage.setItem('tts_volume', value);
       if (chapterAudio) chapterAudio.volume = state.volume;
+      if (chainEngine) chainEngine.setVolume(state.volume);
     }
     ui.volumeSlider.addEventListener('input', () => syncVolume(ui.volumeSlider.value));
     ui.volumeSliderPanel.addEventListener('input', () => syncVolume(ui.volumeSliderPanel.value));
@@ -1574,7 +1589,7 @@
     // người dùng chủ động đổi giọng (applyLive=true).
     if (v.engine === 'tiktok') ensureTiktokSocket();
     if (applyLive && state.playing) {
-      const curTime = chapterAudio ? chapterAudio.currentTime : 0;
+      const curTime = transportCurrentTime();
       const text = getCurrentText();
       if (text) {
         startReading(text, state.fullChapter, curTime);
@@ -1760,18 +1775,26 @@
       a.preservesPitch = true;
       a.mozPreservesPitch = true;
       a.webkitPreservesPitch = true;
+      // Khi engine nối đoạn (chainEngine, dùng cho iPhone) đang chạy thì thẻ
+      // này KHÔNG phát nội dung chương — nó chỉ còn giữ file WAV im lặng của
+      // primeAudioPlayback(). Bỏ qua mọi sự kiện của nó, nếu không 'ended' của
+      // file im lặng đó sẽ bị hiểu là "đọc xong chương" và nhảy chương oan.
       a.ontimeupdate = () => {
+        if (chainEngine) return;
         onAudioTimeUpdate();
       };
       a.onloadedmetadata = () => {
+        if (chainEngine) return;
         applySpeedToAudio(a, state.speed);
         updateTimeAndProgressUI();
         updatePositionState();
       };
       a.onended = () => {
+        if (chainEngine) return;
         if (state.playing) onAudioEnded();
       };
       a.onerror = (e) => {
+        if (chainEngine) return;
         console.warn('Audio player error:', e);
         if (state.playing) {
           stopReading('Lỗi phát âm thanh chương.');
@@ -1787,6 +1810,10 @@
   }
 
   function cleanAudioPlayers() {
+    if (chainEngine) {
+      try { chainEngine.destroy(); } catch (_) {}
+      chainEngine = null;
+    }
     if (chapterAudio) {
       try {
         chapterAudio.pause();
@@ -2004,6 +2031,423 @@
     return true;
   }
 
+  // ─── Chained-Block Engine (dành cho iPhone/Safari — không có MSE) ────────
+  // Trên iPhone MỌI trình duyệt (Safari, Chrome, Cốc Cốc...) đều buộc dùng
+  // engine WebKit của Apple, và WebKit KHÔNG hỗ trợ MediaSource cho mp3 — nên
+  // không thể "append" dữ liệu mới vào stream đang phát như nhánh MSE ở trên.
+  // Cách cũ (ghép blob to dần rồi gán lại src + tua về đúng vị trí đang nghe)
+  // chính là thứ gây khựng nặng trên iPhone: mỗi lần thêm đoạn phải nạp lại +
+  // tua trong một blob ngày càng lớn.
+  //
+  // Cách ở đây: MỖI ĐOẠN là một file audio riêng, nhỏ, hoàn chỉnh; phát bằng
+  // 2 thẻ <audio> luân phiên — thẻ A phát đoạn i trong khi thẻ B đã nạp sẵn
+  // (preload) xong đoạn i+1. Khi A hết, B phát ngay: B KHÔNG phải tua (luôn
+  // bắt đầu từ 0) và KHÔNG phải tải thêm (đã nạp sẵn từ trước), nên không có
+  // thao tác nặng nào xảy ra giữa lúc đang nghe.
+  //
+  // Nếu đoạn kế CHƯA tải xong (hay gặp ở 2x-3x vì nghe nhanh hơn tổng hợp):
+  // tự chuyển sang trạng thái chờ (buffer) rồi phát tiếp NGAY khi đoạn đó về.
+  //
+  // Vẫn là thẻ <audio> thật nên đổi tốc độ vẫn giữ đúng cao độ giọng
+  // (preservesPitch) y như nhánh phát blob đầy đủ.
+  let chainEngine = null;
+  const CHAIN_STALL_TIMEOUT_MS = 20000;
+  const CHAIN_LOW_BUFFER_WARN_SEC = 20;
+
+  // 2 thẻ <audio> của engine nối đoạn phải TỒN TẠI SẴN và được "mở khoá" ngay
+  // trong cú chạm của người dùng (xem primeAudioPlayback). iOS chặn play() lập
+  // trình trên một thẻ audio chưa từng được phát từ cử chỉ người dùng — nếu tạo
+  // thẻ mới sau cú chạm thì tới lúc phát sẽ bị NotAllowedError. Vì vậy giữ 2 thẻ
+  // dùng lại cho mọi chương thay vì tạo mới mỗi lần đọc.
+  const chainPlayers = [null, null];
+  function getChainPlayer(i) {
+    if (!chainPlayers[i]) {
+      const a = new Audio();
+      a.preload = 'auto';
+      a.preservesPitch = true;
+      a.mozPreservesPitch = true;
+      a.webkitPreservesPitch = true;
+      chainPlayers[i] = a;
+    }
+    return chainPlayers[i];
+  }
+  function resetChainPlayer(p) {
+    try {
+      p.pause();
+      p.ontimeupdate = null;
+      p.onended = null;
+      p.onerror = null;
+      p.onloadedmetadata = null;
+      p.removeAttribute('src');
+      p.load();
+    } catch (_) {}
+  }
+
+  function transportCurrentTime() {
+    if (chainEngine) return chainEngine.getCurrentTime();
+    return chapterAudio ? (chapterAudio.currentTime || 0) : 0;
+  }
+  function transportDuration() {
+    if (chainEngine) return chainEngine.getDuration();
+    return chapterAudio ? (chapterAudio.duration || 0) : 0;
+  }
+
+  function startReadingChain(blocks, myToken) {
+    const total = blocks.length;
+    if (!total) return null;
+
+    let eng;
+    try {
+      eng = {
+        blobs: new Array(total).fill(null),
+        urls: new Array(total).fill(null),
+        durations: new Array(total).fill(0),
+        estimates: blocks.map(estimateBlockDuration),
+        players: [getChainPlayer(0), getChainPlayer(1)],
+        loadedIdx: [-1, -1],
+        activeIdx: 0,
+        curIdx: 0,
+        started: false,
+        allReady: false,
+        destroyed: false,
+        waitingForIdx: -1,
+        warnedForIdx: -1,
+        watchdog: null,
+      };
+    } catch (_) {
+      return null;
+    }
+
+    let api = null;
+    function alive() {
+      return !eng.destroyed && chainEngine === api && myToken === state.token;
+    }
+
+    // Đoạn phát được kế tiếp tính từ `from`: bỏ qua các đoạn rỗng (dòng chỉ có
+    // ký tự trang trí, hoặc đoạn tổng hợp lỗi hẳn — xem phần "xả nốt" trong
+    // synthesizeBlocksParallel). known=false nghĩa là đoạn đó chưa tải về.
+    function nextPlayable(from) {
+      let i = Math.max(0, from);
+      while (i < total) {
+        const b = eng.blobs[i];
+        if (!b) return { idx: i, known: false };
+        if (b.size > 0) return { idx: i, known: true };
+        i++;
+      }
+      return { idx: -1, known: true };
+    }
+
+    function ensureUrl(idx) {
+      if (eng.urls[idx]) return eng.urls[idx];
+      const b = eng.blobs[idx];
+      if (!b || !b.size) return null;
+      try {
+        eng.urls[idx] = URL.createObjectURL(b);
+      } catch (_) {
+        return null;
+      }
+      return eng.urls[idx];
+    }
+
+    function loadInto(slot, idx) {
+      if (eng.loadedIdx[slot] === idx) return true;
+      const url = ensureUrl(idx);
+      if (!url) return false;
+      const p = eng.players[slot];
+      try {
+        p.pause();
+        p.src = url;
+        applySpeedToAudio(p, state.speed);
+        p.volume = state.volume;
+        p.load();
+      } catch (_) {
+        return false;
+      }
+      eng.loadedIdx[slot] = idx;
+      p.onloadedmetadata = () => {
+        if (eng.destroyed) return;
+        if (p.duration && isFinite(p.duration)) eng.durations[idx] = p.duration;
+        if (alive() && idx === eng.curIdx) {
+          updateTimeAndProgressUI();
+          updatePositionState();
+        }
+      };
+      return true;
+    }
+
+    // Nạp sẵn đoạn kế vào thẻ đang rảnh — làm NGAY khi đoạn đó vừa tải về,
+    // không chờ tới lúc đoạn hiện tại gần hết, để lúc chuyển không phải tải gì.
+    function preloadAhead() {
+      const nx = nextPlayable(eng.curIdx + 1);
+      if (nx.idx === -1 || !nx.known) return;
+      loadInto(1 - eng.activeIdx, nx.idx);
+    }
+
+    function applyOffset(p, offset) {
+      if (!(offset > 0)) return;
+      const doSet = () => {
+        try { p.currentTime = Math.min(offset, p.duration || offset); } catch (_) {}
+      };
+      if (p.readyState >= 1) doSet();
+      else p.addEventListener('loadedmetadata', doSet, { once: true });
+    }
+
+    // Còn khoảng 20s nữa là hết đoạn đang phát mà đoạn kế VẪN chưa tải về →
+    // báo cho người dùng biết là đang nạp tiếp. Hay gặp ở 2x-3x vì lúc đó tốc
+    // độ nghe nhanh hơn tốc độ tổng hợp giọng. Chỉ báo 1 lần cho mỗi đoạn để
+    // không gọi lại showLoadingBanner() liên tục theo mỗi nhịp timeupdate.
+    function maybeWarnLowBuffer(p) {
+      if (eng.allReady || eng.waitingForIdx >= 0) return;
+      const dur = p.duration || 0;
+      if (!dur || !isFinite(dur)) return;
+      const remain = (dur - (p.currentTime || 0)) / (p.playbackRate || 1);
+      if (remain > CHAIN_LOW_BUFFER_WARN_SEC) return;
+      const nx = nextPlayable(eng.curIdx + 1);
+      if (nx.idx === -1 || nx.known) return;
+      if (eng.warnedForIdx === nx.idx) return;
+      eng.warnedForIdx = nx.idx;
+      showLoadingBanner(
+        `Sắp hết đoạn đang phát • đang nạp đoạn ${nx.idx + 1}/${total}...`,
+        Math.round((nx.idx / total) * 100)
+      );
+    }
+
+    function wireActive(p) {
+      p.ontimeupdate = () => {
+        if (!alive() || eng.players[eng.activeIdx] !== p) return;
+        onAudioTimeUpdate();
+        maybeWarnLowBuffer(p);
+      };
+      p.onended = () => {
+        if (!alive() || eng.players[eng.activeIdx] !== p) return;
+        advance();
+      };
+      p.onerror = () => {
+        if (!alive() || eng.players[eng.activeIdx] !== p) return;
+        // Đoạn này lỗi phát → bỏ qua, đi tiếp chứ không dừng cả chương
+        console.warn('Chain player error, skipping block', eng.curIdx);
+        advance();
+      };
+    }
+
+    function playBlock(idx, offset, autoplay) {
+      const slot = (eng.loadedIdx[0] === idx) ? 0 : (eng.loadedIdx[1] === idx ? 1 : 1 - eng.activeIdx);
+      if (!loadInto(slot, idx)) {
+        // Không nạp được đoạn này (blob lỗi) → coi như đoạn rỗng và đọc tiếp,
+        // không để cả chương đứng lại vì 1 đoạn.
+        eng.blobs[idx] = new Blob([], { type: 'audio/mpeg' });
+        const nx = nextPlayable(idx + 1);
+        if (nx.idx === -1) { endOfChapter(); return; }
+        if (!nx.known) { stall(nx.idx); return; }
+        playBlock(nx.idx, 0, autoplay);
+        return;
+      }
+      try { eng.players[1 - slot].pause(); } catch (_) {}
+      eng.activeIdx = slot;
+      eng.curIdx = idx;
+      const p = eng.players[slot];
+      wireActive(p);
+      applySpeedToAudio(p, state.speed);
+      p.volume = state.volume;
+      applyOffset(p, offset);
+      if (autoplay !== false) {
+        const pr = p.play();
+        if (pr !== undefined) {
+          pr.then(() => {
+            if (!alive()) return;
+            state.isBuffering = false;
+            state.playing = true;
+            setUIState('playing');
+            syncBgmWithTts();
+            updateMediaSession();
+          }).catch((err) => {
+            if (!alive()) return;
+            console.warn('Play error (chain):', err);
+            state.playing = false;
+            setUIState('paused');
+            setStatus('Chạm nút Phát để nghe');
+          });
+        }
+      }
+      // Nạp sẵn đoạn kế SAU khi đã bấm phát đoạn hiện tại, để việc tải ngầm
+      // không giành tài nguyên với đoạn đang bắt đầu phát.
+      preloadAhead();
+    }
+
+    function stall(idx) {
+      eng.waitingForIdx = idx;
+      // Chỉ đổi UI sang "đang nạp" khi thật sự đang đọc — nếu người dùng đang
+      // tạm dừng thì giữ nguyên trạng thái tạm dừng, đoạn mới về sẽ không tự phát.
+      if (state.playing) {
+        state.isBuffering = true;
+        setUIState('loading');
+        showLoadingBanner(
+          `Đang nạp tiếp âm thanh (đoạn ${Math.min(idx + 1, total)}/${total}), vui lòng chờ...`,
+          Math.round((idx / total) * 100)
+        );
+      }
+      clearTimeout(eng.watchdog);
+      eng.watchdog = setTimeout(() => {
+        if (!alive()) return;
+        if (eng.waitingForIdx >= 0 && !eng.allReady && state.playing) {
+          stopReading('Mất kết nối khi đang tải âm thanh. Vui lòng thử lại.');
+        }
+      }, CHAIN_STALL_TIMEOUT_MS);
+    }
+
+    function clearStall() {
+      eng.waitingForIdx = -1;
+      clearTimeout(eng.watchdog);
+      eng.watchdog = null;
+      state.isBuffering = false;
+    }
+
+    function endOfChapter() {
+      clearStall();
+      if (state.playing) onAudioEnded();
+    }
+
+    function advance() {
+      const nx = nextPlayable(eng.curIdx + 1);
+      if (nx.idx === -1) { endOfChapter(); return; }
+      if (!nx.known) { stall(nx.idx); return; }
+      clearStall();
+      playBlock(nx.idx, 0, true);
+    }
+
+    api = {
+      feedBlock(blob, idx) {
+        if (eng.destroyed || chainEngine !== api) return;
+        eng.blobs[idx] = blob;
+
+        if (!eng.started) {
+          const nx = nextPlayable(0);
+          if (!nx.known || nx.idx === -1) return;
+          eng.started = true;
+          clearStall();
+          // Người dùng đã bấm Tạm dừng ngay trong lúc đang tải → nạp sẵn
+          // nhưng không tự phát, giống nhánh MSE và nhánh blob đầy đủ.
+          playBlock(nx.idx, 0, state.uiState !== 'paused');
+          return;
+        }
+
+        if (eng.waitingForIdx >= 0) {
+          const nx = nextPlayable(eng.waitingForIdx);
+          if (nx.idx === -1) { if (eng.allReady) endOfChapter(); return; }
+          if (!nx.known) return;
+          clearStall();
+          playBlock(nx.idx, 0, state.uiState !== 'paused');
+          return;
+        }
+
+        preloadAhead();
+      },
+
+      // Đã tổng hợp xong toàn bộ chương. Nếu vẫn đang chờ một đoạn thì đoạn
+      // đó lỗi hẳn → bỏ qua, phát tiếp đoạn kế (hoặc kết thúc chương).
+      markAllReady() {
+        eng.allReady = true;
+        if (eng.destroyed || eng.waitingForIdx < 0) return;
+        let i = eng.waitingForIdx;
+        while (i < total && (!eng.blobs[i] || eng.blobs[i].size === 0)) i++;
+        clearStall();
+        if (i >= total) endOfChapter();
+        else playBlock(i, 0, state.uiState !== 'paused');
+      },
+
+      getCurrentTime() {
+        let acc = 0;
+        for (let i = 0; i < eng.curIdx; i++) acc += (eng.durations[i] || eng.estimates[i]);
+        const p = eng.players[eng.activeIdx];
+        return acc + ((p && p.currentTime) || 0);
+      },
+
+      getDuration() {
+        let sum = 0;
+        for (let i = 0; i < total; i++) sum += (eng.durations[i] || eng.estimates[i]);
+        return sum;
+      },
+
+      pause() {
+        try { eng.players[eng.activeIdx].pause(); } catch (_) {}
+      },
+
+      resume() {
+        if (eng.waitingForIdx >= 0) return; // đang chờ dữ liệu, có là phát ngay
+        const p = eng.players[eng.activeIdx];
+        applySpeedToAudio(p, state.speed);
+        p.volume = state.volume;
+        const pr = p.play();
+        if (pr !== undefined) pr.catch(() => {});
+      },
+
+      seekTo(sec) {
+        let acc = 0;
+        let target = -1;
+        let offset = 0;
+        for (let i = 0; i < total; i++) {
+          const d = eng.durations[i] || eng.estimates[i];
+          if (sec < acc + d || i === total - 1) {
+            target = i;
+            offset = Math.max(0, sec - acc);
+            break;
+          }
+          acc += d;
+        }
+        if (target < 0) return;
+        const b = eng.blobs[target];
+        if (!b) { stall(target); return; }
+        if (!b.size) {
+          const nx = nextPlayable(target);
+          if (nx.idx === -1) { endOfChapter(); return; }
+          if (!nx.known) { stall(nx.idx); return; }
+          clearStall();
+          playBlock(nx.idx, 0, state.playing);
+          return;
+        }
+        clearStall();
+        if (target === eng.curIdx) {
+          const p = eng.players[eng.activeIdx];
+          try { p.currentTime = Math.min(offset, p.duration || offset); } catch (_) {}
+          updateTimeAndProgressUI();
+          updatePositionState();
+          if (state.playing) {
+            const pr = p.play();
+            if (pr !== undefined) pr.catch(() => {});
+          }
+        } else {
+          playBlock(target, offset, state.playing);
+        }
+      },
+
+      setVolume(v) {
+        eng.players.forEach((p) => { try { p.volume = v; } catch (_) {} });
+      },
+
+      setSpeed(m) {
+        eng.players.forEach((p) => applySpeedToAudio(p, m));
+      },
+
+      isWaiting() { return eng.waitingForIdx >= 0; },
+      hasStarted() { return eng.started; },
+
+      destroy() {
+        eng.destroyed = true;
+        clearTimeout(eng.watchdog);
+        // Chỉ dọn nội dung, KHÔNG bỏ 2 thẻ audio đi — chúng được dùng lại cho
+        // chương sau vì đã được iOS "mở khoá" từ cú chạm đầu tiên.
+        eng.players.forEach(resetChainPlayer);
+        eng.urls.forEach((u) => {
+          if (u) { try { URL.revokeObjectURL(u); } catch (_) {} }
+        });
+        if (chainEngine === api) chainEngine = null;
+      },
+    };
+
+    chainEngine = api;
+    return api;
+  }
+
   // Getter compatibility
   Object.defineProperty(state, 'audioEl', {
     get() { return getChapterAudio(); },
@@ -2025,9 +2469,9 @@
   }
 
   function updateTimeAndProgressUI() {
-    if (!chapterAudio || !ui) return;
-    const cur = chapterAudio.currentTime || 0;
-    const dur = chapterAudio.duration || 0;
+    if (!ui || (!chapterAudio && !chainEngine)) return;
+    const cur = transportCurrentTime();
+    const dur = transportDuration();
     if (ui.timeDisplay) {
       ui.timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
     }
@@ -2038,12 +2482,12 @@
   }
 
   function onAudioTimeUpdate() {
-    if (!chapterAudio || !state.playing) return;
+    if ((!chapterAudio && !chainEngine) || !state.playing) return;
     updateTimeAndProgressUI();
     updatePositionState();
 
-    const cur = chapterAudio.currentTime || 0;
-    const dur = chapterAudio.duration || 0;
+    const cur = transportCurrentTime();
+    const dur = transportDuration();
     if (cur > 3 && Math.floor(cur) % 3 === 0) {
       saveResumeTime(cur, dur);
     }
@@ -2058,11 +2502,18 @@
     if (!trackEl) return;
 
     function seekToEvent(e) {
-      if (!chapterAudio || !chapterAudio.duration) return;
+      const dur = transportDuration();
+      if (!dur) return;
       const rect = trackEl.getBoundingClientRect();
       const clientX = (e.touches && e.touches.length > 0) ? e.touches[0].clientX : e.clientX;
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      chapterAudio.currentTime = ratio * chapterAudio.duration;
+      const target = ratio * dur;
+      if (chainEngine) {
+        chainEngine.seekTo(target);
+        return;
+      }
+      if (!chapterAudio) return;
+      chapterAudio.currentTime = target;
       updateTimeAndProgressUI();
       updatePositionState();
     }
@@ -2103,20 +2554,21 @@
   }
 
   function seekAudioRelative(seconds) {
-    const audio = getChapterAudio();
-    if (!audio) return;
-    const cur = audio.currentTime || 0;
-    const dur = audio.duration || 0;
+    const cur = transportCurrentTime();
+    const dur = transportDuration();
     let target = cur + seconds;
     if (target < 0) target = 0;
     if (dur > 0 && target >= dur) {
       if (state.autoNext) playNextChapter();
-      else {
-        audio.currentTime = dur;
-        onAudioEnded();
-      }
+      else onAudioEnded();
       return;
     }
+    if (chainEngine) {
+      chainEngine.seekTo(target);
+      return;
+    }
+    const audio = getChapterAudio();
+    if (!audio) return;
     audio.currentTime = target;
     updateTimeAndProgressUI();
     updatePositionState();
@@ -2144,12 +2596,12 @@
     const curAudio = getChapterAudio();
     if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && curAudio) {
       try {
-        const dur = curAudio.duration;
-        const pos = curAudio.currentTime;
-        if (!isNaN(dur) && !isNaN(pos) && dur > 0) {
+        const dur = transportDuration();
+        const pos = transportCurrentTime();
+        if (!isNaN(dur) && !isNaN(pos) && dur > 0 && isFinite(dur)) {
           navigator.mediaSession.setPositionState({
             duration: dur,
-            playbackRate: curAudio.playbackRate || 1,
+            playbackRate: state.speed || 1,
             position: Math.min(pos, dur)
           });
         }
@@ -2343,6 +2795,45 @@
       const started = await startReadingMSE(blocks, myToken);
       if (myToken !== state.token) return;
       if (started) return;
+    }
+
+    // Không có MSE (iPhone/Safari): phát nối tiếp từng đoạn bằng 2 thẻ <audio>
+    // luân phiên — nghe được ngay khi có đoạn đầu, đoạn sau nạp sẵn từ trước,
+    // và tự động chờ (buffer) nếu nghe nhanh hơn tải (2x-3x). Xem
+    // startReadingChain().
+    if (forceResumeTime <= 0) {
+      const chain = startReadingChain(blocks, myToken);
+      if (chain) {
+        synthesizeBlocksParallel(blocks, myToken, (done, total) => {
+          if (myToken !== state.token || chain.hasStarted()) return;
+          const pct = Math.round((done / total) * 100);
+          if (ui.progressBar) ui.progressBar.style.width = pct + '%';
+          showLoadingBanner(`Đang kết nối & nạp âm thanh (${done}/${total} đoạn)...`, pct);
+        }, (blob, idx, total) => {
+          if (myToken !== state.token) return;
+          chain.feedBlock(blob, idx);
+          if (idx + 1 < total) {
+            const pct = Math.round(((idx + 1) / total) * 100);
+            showLoadingBanner(`Đang phát âm thanh • nạp ngầm phần còn lại (${idx + 1}/${total})...`, pct);
+          }
+        }).then((mergedBlob) => {
+          if (myToken !== state.token) return;
+          chain.markAllReady();
+          if (!chain.hasStarted()) {
+            stopReading('Lỗi tổng hợp giọng đọc cho chương này. Vui lòng thử lại.');
+            return;
+          }
+          if (mergedBlob) state.fullChapterBlob = mergedBlob;
+          state.allBlocksReady = true;
+          state.isBuffering = false;
+          showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+          setTimeout(hideLoadingBanner, 1000);
+        }).catch(() => {
+          if (myToken !== state.token) return;
+          chain.markAllReady();
+        });
+        return;
+      }
     }
 
     const fullBlob = await synthesizeBlocksParallel(blocks, myToken, (done, total) => {
@@ -2590,12 +3081,20 @@
   const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
   function primeAudioPlayback() {
     try {
-      const a = getChapterAudio();
-      if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
-        a.src = SILENT_WAV;
-      }
-      const p = a.play();
-      if (p !== undefined) p.catch(() => {});
+      // Engine nối đoạn đã phát rồi ⇒ audio đã được "mở khoá", không cần mồi
+      // nữa. Quan trọng trên iPhone: phát thêm 1 file im lặng ở thẻ khác có
+      // thể giành mất quyền phát của thẻ đang đọc chương.
+      if (chainEngine && chainEngine.hasStarted()) return;
+      // Mở khoá CẢ 3 thẻ: thẻ chính (nhánh MSE/blob đầy đủ) và 2 thẻ của engine
+      // nối đoạn. iOS chỉ cho play() lập trình trên thẻ đã từng được phát trong
+      // một cử chỉ của người dùng, nên phải mồi hết ngay tại đây.
+      [getChapterAudio(), getChainPlayer(0), getChainPlayer(1)].forEach((a) => {
+        if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
+          a.src = SILENT_WAV;
+        }
+        const p = a.play();
+        if (p !== undefined) p.catch(() => {});
+      });
     } catch (_) {}
   }
 
@@ -2609,9 +3108,15 @@
 
   function onPauseClick() {
     if (state.playing) {
-      if (chapterAudio) chapterAudio.pause();
+      if (chainEngine) chainEngine.pause();
+      else if (chapterAudio) chapterAudio.pause();
       state.playing = false;
       setUIState('paused');
+      syncBgmWithTts();
+    } else if (chainEngine) {
+      chainEngine.resume();
+      state.playing = true;
+      setUIState(chainEngine.isWaiting() ? 'loading' : 'playing');
       syncBgmWithTts();
     } else if (chapterAudio && chapterAudio.src) {
       applySpeedToAudio(chapterAudio, state.speed);
@@ -2709,7 +3214,12 @@
         seekAudioRelative(-offset);
       });
       navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (details && details.seekTime != null && chapterAudio) {
+        if (!details || details.seekTime == null) return;
+        if (chainEngine) {
+          chainEngine.seekTo(details.seekTime);
+          return;
+        }
+        if (chapterAudio) {
           chapterAudio.currentTime = details.seekTime;
           updateTimeAndProgressUI();
           updatePositionState();
