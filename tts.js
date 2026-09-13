@@ -98,18 +98,18 @@
 
   // ─── Cloudflare Workers ───────
   const SERVERS = [
-    { url: 'https://edge-tts1.lilbabyfroggie.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts3.hoannguyen251325.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts4.manhnguyen251325.workers.dev/tts', type: 'auto' },
     { url: 'https://edge-tts5.thienco-tcc.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts7.thiencocac-tradecoin.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts8.baileyserena1161.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts10.peayhoward.workers.dev/tts', type: 'auto' },
     { url: 'https://msedge-tts-json.nickmonty2020.workers.dev/tts-json', type: 'json' },
     { url: 'https://egde-tts2.quangnguyen251325.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts6.odes-agency.workers.dev/tts', type: 'auto' },
-    { url: 'https://edge-tts9.leroyswanson351.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts10.peayhoward.workers.dev/tts', type: 'auto' },
     { url: 'https://msedge-tts-json.nickmonty777.workers.dev/tts-json', type: 'json' },
+    { url: 'https://edge-tts6.odes-agency.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts4.manhnguyen251325.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts9.leroyswanson351.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts8.baileyserena1161.workers.dev/tts', type: 'auto' },
+    { url: 'https://edge-tts1.lilbabyfroggie.workers.dev/tts', type: 'auto', failCount: 5 },
+    { url: 'https://edge-tts3.hoannguyen251325.workers.dev/tts', type: 'auto', failCount: 5 },
+    { url: 'https://edge-tts7.thiencocac-tradecoin.workers.dev/tts', type: 'auto', failCount: 5 },
   ];
   function b64ToBlob(b64) {
     const bin = atob(b64);
@@ -118,7 +118,7 @@
     return new Blob([bytes], { type: 'audio/mpeg' });
   }
   let serverIndex = 0;
-  async function fetchWorker(server, text, voice, rate, timeoutMs = 5000) {
+  async function fetchWorker(server, text, voice, rate, timeoutMs = 4000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -139,7 +139,7 @@
     } catch (e) { clearTimeout(timer); return null; }
   }
 
-  function raceBatchFast(batch, text, voice, rate, timeoutMs = 3200) {
+  function raceBatchFast(batch, text, voice, rate, timeoutMs = 3000) {
     return new Promise((resolve) => {
       let pending = batch.length;
       if (!pending) { resolve(null); return; }
@@ -175,7 +175,7 @@
     });
   }
 
-  async function raceWorkers(text, voice, rate, raceCount = 4, timeoutMs = 3200) {
+  async function raceWorkers(text, voice, rate, raceCount = 2, timeoutMs = 3000, startOffset = 0) {
     const sortedPool = [...SERVERS].sort((a, b) => {
       const failA = a.failCount || 0;
       const failB = b.failCount || 0;
@@ -186,8 +186,9 @@
     });
 
     const pool = [];
-    for (let k = 0; k < sortedPool.length; k++) {
-      pool.push(sortedPool[(serverIndex + k) % sortedPool.length]);
+    const len = sortedPool.length;
+    for (let k = 0; k < len; k++) {
+      pool.push(sortedPool[(serverIndex + startOffset + k) % len]);
     }
     while (pool.length) {
       const batch = pool.splice(0, raceCount);
@@ -450,14 +451,14 @@
     });
   }
 
-  async function synthesize(text, voice, rate, raceCount = 1) {
+  async function synthesize(text, voice, rate, raceCount = 1, startOffset = 0) {
     // Giọng TikTok đi qua WebSocket riêng, không qua hàng Cloudflare
     // Workers (SERVERS) mà Edge TTS đang dùng — logic Edge TTS giữ
     // nguyên 100%, chỉ thêm nhánh rẽ ở đây.
     if (VOICE_ENGINE.get(voice) === 'tiktok') {
       return synthesizeTikTok(text, voice);
     }
-    return raceWorkers(text, voice, rate, raceCount);
+    return raceWorkers(text, voice, rate, raceCount, 3000, startOffset);
   }
 
   // ─── Chia văn bản thành từng chunk ──────────────────────
@@ -989,18 +990,18 @@
     return '';
   }
 
-  async function synthesizeWithRetry(text, voice, rate, raceCount = 4, maxRetries = 3) {
+  async function synthesizeWithRetry(text, voice, rate, raceCount = 2, maxRetries = 2, startOffset = 0) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const blob = await synthesize(text, voice, rate, raceCount);
+      const blob = await synthesize(text, voice, rate, raceCount, startOffset + attempt * 2);
       if (blob) return blob;
       if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+        await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
       }
     }
     return null;
   }
 
-  function splitChapterIntoBlocks(text, maxChars = 900) {
+  function splitChapterIntoBlocks(text, maxChars = 950) {
     if (!text) return [];
     const sentences = splitIntoSentences(text);
     const blocks = [];
@@ -1019,14 +1020,18 @@
     return blocks;
   }
 
-  async function synthesizeBlocksParallel(blocks, cancelCheck, onProgress, onStreamUpdate) {
+  async function synthesizeBlocksParallel(blocks, cancelCheck, onProgress, onSequentialBlock) {
     const n = blocks.length;
     const blobs = new Array(n).fill(null);
     let completed = 0;
+    // deliveredUpTo: dùng cho onSequentialBlock (streaming/MSE) — báo từng khối
+    // theo ĐÚNG thứ tự 0,1,2... ngay khi nó sẵn sàng, dù các worker hoàn thành
+    // song song không theo thứ tự. Không ảnh hưởng gì tới đường cũ (không truyền
+    // onSequentialBlock) — vẫn trả về đúng 1 blob gộp như trước.
+    let deliveredUpTo = 0;
     const isTikTok = VOICE_ENGINE.get(state.voice) === 'tiktok';
-    const concurrency = isTikTok ? 1 : Math.min(6, n);
+    const concurrency = isTikTok ? 1 : Math.min(8, n);
     let queueIdx = 0;
-    let highestContiguous = 0;
 
     function isCancelled() {
       if (typeof cancelCheck === 'function') return cancelCheck();
@@ -1034,19 +1039,12 @@
       return false;
     }
 
-    function checkContiguousAndStream() {
-      if (typeof onStreamUpdate !== 'function') return;
-      let contiguous = 0;
-      while (contiguous < n && blobs[contiguous]) {
-        contiguous++;
-      }
-      if (contiguous > highestContiguous) {
-        highestContiguous = contiguous;
-        try {
-          const contiguousBlobs = blobs.slice(0, contiguous);
-          const partialBlob = new Blob(contiguousBlobs, { type: 'audio/mpeg' });
-          onStreamUpdate(partialBlob, contiguous, n);
-        } catch (_) {}
+    function tryDeliverSequential() {
+      if (typeof onSequentialBlock !== 'function') return;
+      while (deliveredUpTo < n && blobs[deliveredUpTo]) {
+        const idx = deliveredUpTo;
+        deliveredUpTo++;
+        try { onSequentialBlock(blobs[idx], idx, n); } catch (_) {}
       }
     }
 
@@ -1060,19 +1058,19 @@
           blobs[i] = new Blob([], { type: 'audio/mpeg' });
           completed++;
           if (onProgress) onProgress(completed, n);
-          checkContiguousAndStream();
+          tryDeliverSequential();
           continue;
         }
 
-        // Khối 0: Đua 4 server để người dùng nghe được ngay trong < 1 giây!
-        // Các khối 1..n: Đua 2 server để tránh nghẽn mạng và tránh 429 rate limit
-        const raceCount = (i === 0) ? 4 : 2;
-        const blob = await synthesizeWithRetry(speechText, state.voice, SYNTH_RATE, raceCount, 2);
+        // Mỗi khối i xuất phát từ vị trí server khác nhau (i * 2) để phân bổ đều tải,
+        // không đụng nhau và không gây nghẽn Cloudflare Workers
+        const startOffset = i * 2;
+        const blob = await synthesizeWithRetry(speechText, state.voice, SYNTH_RATE, 2, 2, startOffset);
         if (isCancelled()) return;
         blobs[i] = blob;
         completed++;
         if (onProgress) onProgress(completed, n);
-        checkContiguousAndStream();
+        tryDeliverSequential();
       }
     }
 
@@ -1752,66 +1750,53 @@
     return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
   }
 
-  // ─── Dual-Player Gapless Audio Engine ──────────────────
-  const audioPlayers = [null, null];
-  let activePlayerIdx = 0;
+  // ─── Single Persistent Audio Engine (Zero-glitch mobile playback) ─────
   let chapterAudio = null;
 
-  function getAudioPlayer(idx) {
-    if (!audioPlayers[idx]) {
+  function getChapterAudio() {
+    if (!chapterAudio) {
       const a = new Audio();
       a.preload = 'auto';
       a.preservesPitch = true;
       a.mozPreservesPitch = true;
       a.webkitPreservesPitch = true;
-      audioPlayers[idx] = a;
-    }
-    const a = audioPlayers[idx];
-    a.ontimeupdate = () => {
-      if (a === getChapterAudio()) onAudioTimeUpdate();
-    };
-    a.onloadedmetadata = () => {
-      applySpeedToAudio(a, state.speed);
-      if (a === getChapterAudio()) {
+      a.ontimeupdate = () => {
+        onAudioTimeUpdate();
+      };
+      a.onloadedmetadata = () => {
+        applySpeedToAudio(a, state.speed);
         updateTimeAndProgressUI();
         updatePositionState();
-      }
-    };
-    a.onended = () => {
-      if (a === getChapterAudio() && state.playing) onAudioEnded();
-    };
-    a.onerror = (e) => {
-      console.warn('Audio player ' + idx + ' error:', e);
-      if (state.playing && a === getChapterAudio()) {
-        stopReading('Lỗi phát âm thanh chương.');
-      }
-    };
-    chapterAudio = audioPlayers[activePlayerIdx];
-    return a;
+      };
+      a.onended = () => {
+        if (state.playing) onAudioEnded();
+      };
+      a.onerror = (e) => {
+        console.warn('Audio player error:', e);
+        if (state.playing) {
+          stopReading('Lỗi phát âm thanh chương.');
+        }
+      };
+      chapterAudio = a;
+    }
+    return chapterAudio;
   }
 
-  function getChapterAudio() {
-    const a = getAudioPlayer(activePlayerIdx);
-    chapterAudio = a;
-    return a;
+  function getAudioPlayer() {
+    return getChapterAudio();
   }
 
   function cleanAudioPlayers() {
-    [0, 1].forEach(i => {
-      const p = audioPlayers[i];
-      if (p) {
-        try {
-          p.pause();
-          if (p.src && p.src.startsWith('blob:')) {
-            URL.revokeObjectURL(p.src);
-          }
-          p.removeAttribute('src');
-          p.load();
-        } catch (_) {}
-      }
-    });
-    activePlayerIdx = 0;
-    chapterAudio = null;
+    if (chapterAudio) {
+      try {
+        chapterAudio.pause();
+        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(chapterAudio.src);
+        }
+        chapterAudio.removeAttribute('src');
+        chapterAudio.load();
+      } catch (_) {}
+    }
   }
 
   function applySpeedToAudio(a, mult) {
@@ -1823,6 +1808,200 @@
       a.defaultPlaybackRate = mult;
       a.playbackRate = mult;
     } catch (_) {}
+  }
+
+  // ─── MSE Progressive Streaming (phát ngay, nạp ngầm KHÔNG giật) ────────
+  // Lý do cần cái này: cách "phát từng phần rồi ghép blob lớn hơn + gán lại
+  // src + tua currentTime" trước đây (đã bỏ ở trên) mỗi lần ghép thêm đoạn
+  // phải LOAD LẠI TỪ ĐẦU một blob ngày càng to rồi tua lại đúng vị trí đang
+  // nghe — trên điện thoại việc này tốn thời gian xử lý thật, gây khựng, và
+  // càng về cuối chương blob càng to nên càng khựng nặng hơn.
+  // MediaSource Extensions (MSE) giải quyết đúng vấn đề này: chỉ "append"
+  // PHẦN DỮ LIỆU MỚI vào một stream đang phát liên tục trên CÙNG 1 audio
+  // element — không build lại gì cả, không tua lại, trình duyệt tự lo phần
+  // "chờ buffer" bằng sự kiện waiting/playing gốc (êm hơn hẳn so với tự tay
+  // làm). Không phải máy nào cũng hỗ trợ (đặc biệt Safari/iPhone) — máy
+  // không hỗ trợ tự rơi về nhánh "chờ tải xong cả chương" bên dưới.
+  const MSE_MIME = 'audio/mpeg';
+  function mseSupported() {
+    try {
+      return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(MSE_MIME);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Ước lượng thô thời lượng 1 khối dựa trên số ký tự, để audio.duration có
+  // giá trị hợp lý ngay từ đầu (không phải Infinity) cho thanh tiến trình —
+  // sẽ được chỉnh lại chính xác khi nạp xong toàn bộ (xem endOfStream ở dưới).
+  // Không chia theo state.speed: duration của audio KHÔNG đổi theo
+  // playbackRate (giống hệt cách trình duyệt xử lý audio thường), chỉ tốc độ
+  // chạy qua nó thay đổi — khớp với hành vi của nhánh phát blob đầy đủ.
+  const MSE_CHARS_PER_SEC = 14;
+  function estimateBlockDuration(blockText) {
+    return Math.max(0.5, (blockText || '').length / MSE_CHARS_PER_SEC);
+  }
+
+  // Thử phát tiến triển qua MSE. Trả về true nếu đã bắt tay MSE thành công
+  // (mọi việc còn lại — tải ngầm, phát, chờ buffer — tự chạy nền từ đây).
+  // Trả về false nếu MSE lỗi ngay từ bước mở — gọi nơi dùng nên rơi về nhánh
+  // "chờ tải xong cả chương" như cũ.
+  async function startReadingMSE(blocks, myToken) {
+    let mediaSource;
+    try {
+      mediaSource = new MediaSource();
+    } catch (_) {
+      return false;
+    }
+
+    const audio = getChapterAudio();
+    const appendQueue = [];
+    let sourceBuffer = null;
+    let sbUpdating = false;
+    let allAppended = false;
+    let playbackStarted = false;
+    let deliveredCount = 0;
+    let waitingWatchdog = null;
+    const totalEstimatedDuration = blocks.reduce((s, b) => s + estimateBlockDuration(b), 0);
+
+    function pump() {
+      if (!sourceBuffer || sbUpdating) return;
+      if (appendQueue.length) {
+        const buf = appendQueue.shift();
+        try {
+          sbUpdating = true;
+          sourceBuffer.appendBuffer(buf);
+        } catch (_) {
+          sbUpdating = false;
+        }
+      } else if (allAppended && mediaSource.readyState === 'open') {
+        try {
+          const buffered = sourceBuffer.buffered;
+          if (buffered.length) {
+            try { mediaSource.duration = buffered.end(buffered.length - 1); } catch (_) {}
+          }
+          mediaSource.endOfStream();
+        } catch (_) {}
+      }
+    }
+
+    const objectUrl = URL.createObjectURL(mediaSource);
+    const openOk = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 3000);
+      mediaSource.addEventListener('sourceopen', () => {
+        clearTimeout(timer);
+        try {
+          sourceBuffer = mediaSource.addSourceBuffer(MSE_MIME);
+        } catch (_) {
+          resolve(false);
+          return;
+        }
+        sourceBuffer.addEventListener('updateend', () => {
+          sbUpdating = false;
+          pump();
+        });
+        sourceBuffer.addEventListener('error', () => { sbUpdating = false; });
+        resolve(true);
+      }, { once: true });
+      audio.src = objectUrl;
+    });
+
+    if (!openOk || myToken !== state.token) {
+      try { URL.revokeObjectURL(objectUrl); } catch (_) {}
+      return false;
+    }
+
+    try { mediaSource.duration = totalEstimatedDuration; } catch (_) {}
+
+    audio.onwaiting = () => {
+      if (myToken !== state.token) return;
+      state.isBuffering = true;
+      setUIState('loading');
+      showLoadingBanner('Đang nạp tiếp âm thanh, vui lòng chờ trong giây lát...', Math.round((deliveredCount / blocks.length) * 100));
+      clearTimeout(waitingWatchdog);
+      waitingWatchdog = setTimeout(() => {
+        if (myToken !== state.token) return;
+        if (state.isBuffering && !allAppended) {
+          stopReading('Mất kết nối khi đang tải âm thanh. Vui lòng thử lại.');
+        }
+      }, 20000);
+    };
+    audio.onplaying = () => {
+      if (myToken !== state.token) return;
+      clearTimeout(waitingWatchdog);
+      state.isBuffering = false;
+      if (state.playing) setUIState('playing');
+    };
+
+    async function onSequentialBlock(blob, idx, total) {
+      if (myToken !== state.token) return;
+      deliveredCount = idx + 1;
+      try {
+        const buf = await blob.arrayBuffer();
+        if (myToken !== state.token) return;
+        if (buf.byteLength > 0) {
+          appendQueue.push(buf);
+          pump();
+        }
+      } catch (_) {}
+
+      if (!playbackStarted) {
+        playbackStarted = true;
+        applySpeedToAudio(audio, state.speed);
+        audio.volume = state.volume;
+        // Người dùng đã bấm Tạm dừng ngay trong lúc đang tải (trước khi có
+        // đoạn audio đầu tiên) — không tự phát, chỉ giữ audio sẵn sàng, giống
+        // hệt hành vi của nhánh "chờ tải xong cả chương" bên dưới.
+        if (state.uiState !== 'paused') {
+          const p = audio.play();
+          if (p !== undefined) {
+            p.then(() => {
+              if (myToken !== state.token) return;
+              state.playing = true;
+              setUIState('playing');
+              syncBgmWithTts();
+              updateMediaSession();
+            }).catch((err) => {
+              console.warn('Play error (MSE):', err);
+              if (myToken === state.token) {
+                state.playing = false;
+                setUIState('paused');
+                setStatus('Chạm nút Phát để nghe');
+              }
+            });
+          }
+        }
+      }
+
+      if (idx + 1 < total) {
+        const pct = Math.round(((idx + 1) / total) * 100);
+        showLoadingBanner(`Đang phát âm thanh • nạp ngầm phần còn lại (${idx + 1}/${total})...`, pct);
+      }
+    }
+
+    synthesizeBlocksParallel(blocks, myToken, (done, total) => {
+      if (myToken !== state.token || playbackStarted) return;
+      const pct = Math.round((done / total) * 100);
+      if (ui.progressBar) ui.progressBar.style.width = pct + '%';
+    }, onSequentialBlock).then((mergedBlob) => {
+      if (myToken !== state.token) return;
+      allAppended = true;
+      pump();
+      if (!playbackStarted) {
+        stopReading('Lỗi tổng hợp giọng đọc cho chương này. Vui lòng thử lại.');
+        return;
+      }
+      if (mergedBlob) state.fullChapterBlob = mergedBlob;
+      state.allBlocksReady = true;
+      state.isBuffering = false;
+      showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+      setTimeout(hideLoadingBanner, 1000);
+    }).catch(() => {
+      allAppended = true;
+      pump();
+    });
+
+    return true;
   }
 
   // Getter compatibility
@@ -2128,80 +2307,6 @@
     doPlay();
   }
 
-  function performGaplessUpgrade(blob, myToken, isComplete = false) {
-    if (myToken !== state.token) {
-      if (isComplete) {
-        state.fullChapterBlob = blob;
-        state.allBlocksReady = true;
-      }
-      return;
-    }
-    const curPlayer = getChapterAudio();
-    const curTime = curPlayer ? (curPlayer.currentTime || 0) : 0;
-    const isManuallyPaused = !state.playing || (state.uiState === 'paused' && !state.isBuffering);
-    const nextIdx = 1 - activePlayerIdx;
-    const nextPlayer = getAudioPlayer(nextIdx);
-
-    const oldNextSrc = nextPlayer.src;
-    nextPlayer.src = URL.createObjectURL(blob);
-    if (oldNextSrc && oldNextSrc.startsWith('blob:')) {
-      try { URL.revokeObjectURL(oldNextSrc); } catch (_) {}
-    }
-    applySpeedToAudio(nextPlayer, state.speed);
-    if (curTime > 0) {
-      try { nextPlayer.currentTime = curTime; } catch (_) {}
-    }
-    nextPlayer.volume = state.volume;
-
-    if (isManuallyPaused) {
-      activePlayerIdx = nextIdx;
-      chapterAudio = nextPlayer;
-      updateTimeAndProgressUI();
-      updatePositionState();
-      if (isComplete) {
-        state.fullChapterBlob = blob;
-        state.allBlocksReady = true;
-        showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-        setTimeout(hideLoadingBanner, 1000);
-      }
-      return;
-    }
-
-    const p = nextPlayer.play();
-    if (p !== undefined) {
-      p.then(() => {
-        if (myToken !== state.token) return;
-        if (curPlayer) {
-          curPlayer.pause();
-          const oldCurSrc = curPlayer.src;
-          curPlayer.removeAttribute('src');
-          if (oldCurSrc && oldCurSrc.startsWith('blob:')) {
-            try { URL.revokeObjectURL(oldCurSrc); } catch (_) {}
-          }
-        }
-        activePlayerIdx = nextIdx;
-        chapterAudio = nextPlayer;
-        state.isBuffering = false;
-        state.playing = true;
-        setUIState('playing');
-        syncBgmWithTts();
-        updateTimeAndProgressUI();
-        updatePositionState();
-        if (isComplete) {
-          state.fullChapterBlob = blob;
-          state.allBlocksReady = true;
-          showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-          setTimeout(hideLoadingBanner, 1000);
-        }
-      }).catch(() => {
-        if (isComplete) {
-          state.fullChapterBlob = blob;
-          state.allBlocksReady = true;
-        }
-      });
-    }
-  }
-
   async function startReading(text, fullChapter = true, forceResumeTime = 0) {
     state.token++;
     const myToken = state.token;
@@ -2222,72 +2327,31 @@
     state.allBlocksReady = false;
     state.isBuffering = false;
 
-    const blocks = splitChapterIntoBlocks(text, 850);
+    const blocks = splitChapterIntoBlocks(text, 950);
     if (!blocks.length) {
       hideLoadingBanner();
       stopReading('Không có nội dung để đọc.');
       return;
     }
 
-    let playbackStarted = false;
-    let bufferedCount = 0;
-
-    const onStreamUpdate = (partialBlob, contiguous, totalCount) => {
+    // Phát tiến triển qua MSE khi máy hỗ trợ — nghe được ngay khi có đoạn
+    // đầu, các đoạn sau nạp ngầm KHÔNG giật (xem startReadingMSE()). Chỉ áp
+    // dụng cho lượt phát MỚI hoàn toàn (forceResumeTime <= 0) — trường hợp
+    // tiếp tục từ vị trí đã lưu (mở lại chương cũ) vẫn dùng nhánh chờ tải
+    // xong cả chương bên dưới cho chắc (ít nhạy cảm về tốc độ hơn).
+    if (forceResumeTime <= 0 && mseSupported()) {
+      const started = await startReadingMSE(blocks, myToken);
       if (myToken !== state.token) return;
-
-      // 1. Chưa bắt đầu phát: Khi khối 0 sẵn sàng, phát ngay lập tức!
-      if (!playbackStarted) {
-        if (forceResumeTime > 0 && contiguous < totalCount) return;
-        playbackStarted = true;
-        bufferedCount = contiguous;
-        playPreparedBlob(partialBlob, myToken, forceResumeTime);
-        const pct = Math.round((contiguous / totalCount) * 100);
-        showLoadingBanner(`Đang phát âm thanh • Nạp ngầm các phần sau (${contiguous}/${totalCount} đoạn)...`, pct);
-        return;
-      }
-
-      // 2. Đã phát: Nâng cấp buffer liên tục không giật tiếng
-      // - Nếu đang bị khựng chờ buffer (state.isBuffering): NÂNG CẤP VÀ TIẾP TỤC PHÁT NGAY!
-      // - Hoặc đã tải xong 100% (contiguous === totalCount)
-      // - Hoặc đã có thêm từ 2 khối mới (contiguous >= bufferedCount + 2)
-      // - Hoặc thời lượng còn lại của buffer hiện tại sắp hết (< 25s) và đã có thêm khối mới (contiguous > bufferedCount)
-      const curAudio = getChapterAudio();
-      const curTime = curAudio ? (curAudio.currentTime || 0) : 0;
-      const dur = curAudio ? (curAudio.duration || 0) : 0;
-      const remaining = dur - curTime;
-
-      const shouldUpgrade = (
-        state.isBuffering ||
-        contiguous === totalCount ||
-        (contiguous >= bufferedCount + 2) ||
-        (dur > 0 && remaining < 25 && contiguous > bufferedCount)
-      );
-
-      if (shouldUpgrade) {
-        bufferedCount = contiguous;
-        const isDone = (contiguous === totalCount);
-        if (isDone) {
-          state.allBlocksReady = true;
-          state.fullChapterBlob = partialBlob;
-        }
-        performGaplessUpgrade(partialBlob, myToken, isDone);
-        const pct = Math.round((contiguous / totalCount) * 100);
-        if (!isDone) {
-          showLoadingBanner(`Đang phát âm thanh • Nạp ngầm các phần sau (${contiguous}/${totalCount} đoạn)...`, pct);
-        }
-      }
-    };
+      if (started) return;
+    }
 
     const fullBlob = await synthesizeBlocksParallel(blocks, myToken, (done, total) => {
       if (myToken !== state.token) return;
       const pct = Math.round((done / total) * 100);
       if (ui.progressBar) ui.progressBar.style.width = pct + '%';
-      if (playbackStarted) {
-        showLoadingBanner(`Đang phát âm thanh • Nạp ngầm các phần sau (${done}/${total} đoạn • ${pct}%)...`, pct);
-      } else {
-        showLoadingBanner(`Đang kết nối & nạp âm thanh (${done}/${total} đoạn • ${pct}%)...`, pct);
-      }
-    }, onStreamUpdate);
+      showLoadingBanner(`Đang tải âm thanh: ${done}/${total} đoạn (${pct}%)...`, pct);
+      setStatus(`Đang tải âm thanh (${done}/${total} đoạn • ${pct}%)`);
+    });
 
     if (myToken !== state.token) {
       hideLoadingBanner();
@@ -2295,7 +2359,7 @@
     }
     if (!fullBlob) {
       hideLoadingBanner();
-      stopReading('Lỗi tổng hợp giọng đọc cho chương này.');
+      stopReading('Lỗi tổng hợp giọng đọc cho chương này. Vui lòng thử lại.');
       return;
     }
 
@@ -2303,13 +2367,20 @@
     state.isBuffering = false;
     state.fullChapterBlob = fullBlob;
 
-    if (playbackStarted) {
-      performGaplessUpgrade(fullBlob, myToken, true);
-    } else {
-      playPreparedBlob(fullBlob, myToken, forceResumeTime);
+    if (state.uiState === 'paused') {
+      const audio = getChapterAudio();
+      const blobUrl = URL.createObjectURL(fullBlob);
+      audio.src = blobUrl;
+      applySpeedToAudio(audio, state.speed);
+      if (forceResumeTime > 0) audio.currentTime = forceResumeTime;
       showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
       setTimeout(hideLoadingBanner, 1000);
+      return;
     }
+
+    playPreparedBlob(fullBlob, myToken, forceResumeTime);
+    showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+    setTimeout(hideLoadingBanner, 1000);
   }
 
   let prepIdCounter = 0;
@@ -2324,15 +2395,9 @@
       id: prepId,
       ni,
       blob: null,
-      firstChunkBlob: null,
-      latestContiguousBlob: null,
-      contiguousCount: 0,
-      totalCount: 0,
       ready: false,
       failed: false,
       cancelled: false,
-      onProgressUpdate: null,
-      onComplete: null,
     };
     state.nextChap = prep;
 
@@ -2352,33 +2417,18 @@
       const text = getChapterSpeechText(ni);
       if (text) {
         clearInterval(poll);
-        const blocks = splitChapterIntoBlocks(text, 850);
+        const blocks = splitChapterIntoBlocks(text, 950);
         if (!blocks.length) { prep.failed = true; return; }
-        prep.totalCount = blocks.length;
-
-        const onPrepStream = (partialBlob, contiguous, total) => {
-          if (prep.cancelled) return;
-          prep.latestContiguousBlob = partialBlob;
-          prep.contiguousCount = contiguous;
-          if (contiguous === 1) prep.firstChunkBlob = partialBlob;
-          if (typeof prep.onProgressUpdate === 'function') {
-            try { prep.onProgressUpdate(partialBlob, contiguous, total); } catch (_) {}
-          }
-        };
 
         synthesizeBlocksParallel(
           blocks,
           () => prep.cancelled,
-          null,
-          onPrepStream
+          null
         ).then((blob) => {
           if (prep.cancelled) return;
           if (blob) {
             prep.blob = blob;
             prep.ready = true;
-            if (typeof prep.onComplete === 'function') {
-              try { prep.onComplete(blob); } catch (_) {}
-            }
           } else {
             prep.failed = true;
           }
@@ -2439,57 +2489,13 @@
       return;
     }
 
-    // 2. Nếu đã có sẵn contiguous audio (từ 1 khối trở lên): phát ngay lập tức, ngầm nâng cấp các khối còn lại!
-    if (canUsePrep && prep.latestContiguousBlob) {
-      state.nextChap = null;
-      let prepBuffered = prep.contiguousCount;
-      playPreparedBlob(prep.latestContiguousBlob, myToken, 0);
-      const pct = Math.round((prepBuffered / prep.totalCount) * 100);
-      showLoadingBanner(`Đang phát chương mới • Nạp ngầm các phần sau (${prepBuffered}/${prep.totalCount} đoạn)...`, pct);
-
-      prep.onProgressUpdate = (partialBlob, contiguous, total) => {
-        if (myToken !== state.token) return;
-        const curAudio = getChapterAudio();
-        const curTime = curAudio ? (curAudio.currentTime || 0) : 0;
-        const dur = curAudio ? (curAudio.duration || 0) : 0;
-        const remaining = dur - curTime;
-        const shouldUpgrade = (
-          state.isBuffering ||
-          contiguous === total ||
-          (contiguous >= prepBuffered + 2) ||
-          (dur > 0 && remaining < 25 && contiguous > prepBuffered)
-        );
-        if (shouldUpgrade) {
-          prepBuffered = contiguous;
-          const isDone = (contiguous === total);
-          if (isDone) {
-            state.allBlocksReady = true;
-            state.fullChapterBlob = partialBlob;
-          }
-          performGaplessUpgrade(partialBlob, myToken, isDone);
-          const p = Math.round((contiguous / total) * 100);
-          if (!isDone) {
-            showLoadingBanner(`Đang phát chương mới • Nạp ngầm các phần sau (${contiguous}/${total} đoạn)...`, p);
-          }
-        }
-      };
-
-      prep.onComplete = (fullBlob) => {
-        if (myToken !== state.token) return;
-        state.allBlocksReady = true;
-        state.fullChapterBlob = fullBlob;
-        performGaplessUpgrade(fullBlob, myToken, true);
-      };
-      return;
-    }
-
-    // 3. Nếu đang nạp dở trong state.nextChap: chờ tối đa 3.5s để lấy khối đầu hoặc toàn bộ
-    if (canUsePrep) {
-      showLoadingBanner('Đang nạp âm thanh chương mới...', 50);
+    // 2. Nếu đang nạp dở trong state.nextChap: chờ tối đa 2.5s để nạp xong toàn bộ
+    if (canUsePrep && !prep.ready && !prep.failed) {
+      showLoadingBanner('Đang hoàn tất nạp âm thanh chương mới...', 75);
       const waitStart = Date.now();
-      while (!prep.latestContiguousBlob && !prep.ready && !prep.failed && !prep.cancelled && Date.now() - waitStart < 3500) {
+      while (!prep.ready && !prep.failed && !prep.cancelled && Date.now() - waitStart < 2500) {
         if (myToken !== state.token) return;
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 100));
       }
       if (myToken !== state.token) return;
       if (prep.ready && prep.blob) {
@@ -2501,41 +2507,6 @@
         setTimeout(hideLoadingBanner, 1000);
         return;
       }
-      if (prep.latestContiguousBlob) {
-        state.nextChap = null;
-        let prepBuffered = prep.contiguousCount;
-        playPreparedBlob(prep.latestContiguousBlob, myToken, 0);
-        showLoadingBanner(`Đang phát chương mới • Nạp ngầm các phần sau (${prepBuffered}/${prep.totalCount} đoạn)...`, Math.round((prepBuffered / prep.totalCount) * 100));
-        prep.onProgressUpdate = (partialBlob, contiguous, total) => {
-          if (myToken !== state.token) return;
-          const curAudio = getChapterAudio();
-          const curTime = curAudio ? (curAudio.currentTime || 0) : 0;
-          const dur = curAudio ? (curAudio.duration || 0) : 0;
-          const remaining = dur - curTime;
-          const shouldUpgrade = (
-            state.isBuffering ||
-            contiguous === total ||
-            (contiguous >= prepBuffered + 2) ||
-            (dur > 0 && remaining < 25 && contiguous > prepBuffered)
-          );
-          if (shouldUpgrade) {
-            prepBuffered = contiguous;
-            const isDone = (contiguous === total);
-            if (isDone) {
-              state.allBlocksReady = true;
-              state.fullChapterBlob = partialBlob;
-            }
-            performGaplessUpgrade(partialBlob, myToken, isDone);
-          }
-        };
-        prep.onComplete = (fullBlob) => {
-          if (myToken !== state.token) return;
-          state.allBlocksReady = true;
-          state.fullChapterBlob = fullBlob;
-          performGaplessUpgrade(fullBlob, myToken, true);
-        };
-        return;
-      }
     }
 
     if (prep) {
@@ -2543,7 +2514,7 @@
       state.nextChap = null;
     }
 
-    // 4. Nếu chưa nạp xong: kích hoạt preload/dịch và chờ văn bản tiếng Việt
+    // 3. Nếu chưa nạp xong: kích hoạt preload/dịch và chờ văn bản tiếng Việt
     if (typeof _startPreload === 'function') _startPreload(targetIndex);
     showLoadingBanner('Đang chuyển sang chương mới & nạp âm thanh...', 15);
     setStatus('Đang chuyển chương tiếp theo…');
@@ -2584,16 +2555,6 @@
       return;
     }
 
-    // Nếu chưa tải xong toàn bộ các đoạn của chương (mạng chậm, audio phát chạm đuôi buffer tạm):
-    // TUYỆT ĐỐI KHÔNG DỪNG ĐỌC VÀ KHÔNG NHẢY CHƯƠNG!
-    if (!state.allBlocksReady) {
-      state.isBuffering = true;
-      state.playing = true;
-      setUIState('loading');
-      showLoadingBanner('Đang nạp tiếp âm thanh, vui lòng chờ trong giây lát...', 85);
-      return;
-    }
-
     clearResumePoint();
     if (state.autoNext) {
       await finishChapterAutoNext();
@@ -2629,14 +2590,12 @@
   const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
   function primeAudioPlayback() {
     try {
-      [0, 1].forEach(i => {
-        const a = getAudioPlayer(i);
-        if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
-          a.src = SILENT_WAV;
-        }
-        const p = a.play();
-        if (p !== undefined) p.catch(() => {});
-      });
+      const a = getChapterAudio();
+      if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
+        a.src = SILENT_WAV;
+      }
+      const p = a.play();
+      if (p !== undefined) p.catch(() => {});
     } catch (_) {}
   }
 
