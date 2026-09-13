@@ -1240,7 +1240,7 @@
 
           <div class="tts-right">
             <button class="tts-tbtn tts-gear" id="tts-settings-btn" title="Cài đặt">${ICON_GEAR}</button>
-            <button class="tts-tbtn" id="tts-close" title="Đóng">${ICON_CLOSE}</button>
+            <button class="tts-tbtn" id="tts-close" title="Ẩn thanh nghe (vẫn đọc tiếp)">${ICON_CLOSE}</button>
           </div>
         </div>
       </div>`;
@@ -1439,7 +1439,9 @@
 
     ui.playPauseBtn.addEventListener('click', onPlayPauseClick);
     ui.closeBtn.addEventListener('click', () => {
-      stopReading('');
+      // CHỈ ẨN thanh nghe, KHÔNG dừng đọc: audio vẫn chạy tiếp (kể cả khi khoá
+      // máy), bấm lại nút "Nghe" để mở thanh ra. Muốn dừng tiếng thì dùng nút
+      // Tạm dừng trên thanh.
       closeSettingsPanel();
       root.style.display = 'none';
       setFloatBtnOn(false);
@@ -3089,9 +3091,11 @@
       // nối đoạn. iOS chỉ cho play() lập trình trên thẻ đã từng được phát trong
       // một cử chỉ của người dùng, nên phải mồi hết ngay tại đây.
       [getChapterAudio(), getChainPlayer(0), getChainPlayer(1)].forEach((a) => {
-        if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
-          a.src = SILENT_WAV;
-        }
+        // Thẻ nào đang giữ audio THẬT của chương thì không đụng tới: nó đã được
+        // mở khoá từ lần mồi trước, và gọi play() ở đây sẽ phát lại tiếng ngoài
+        // ý muốn khi người dùng đang tạm dừng (vd. lúc ẩn/mở lại thanh nghe).
+        if (a.src && a.src !== '' && !a.src.startsWith('data:audio/wav')) return;
+        a.src = SILENT_WAV;
         const p = a.play();
         if (p !== undefined) p.catch(() => {});
       });
