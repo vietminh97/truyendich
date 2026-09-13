@@ -1,4 +1,4 @@
-// sw.js — Service Worker tối thiểu cho truyendichai
+// sw.js — Service Worker tối thiểu cho TruyenDichAI
 // Mục đích chính: (1) cho phép Chrome/Edge Android hiện nút "Cài đặt app" (PWA installability
 // yêu cầu phải có SW đăng ký fetch handler), (2) cache app-shell để load nhanh hơn ở các lần sau
 // và có thể mở lại (không có mạng) tối thiểu là trang chính.

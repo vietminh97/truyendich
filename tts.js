@@ -2202,7 +2202,7 @@
         const chapTitle = (typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) ? S.chapters[S.cur].title : '';
         navigator.mediaSession.metadata = new MediaMetadata({
           title: `Đoạn ${i + 1}/${state.chunks.length} - ${chapTitle || document.title}`,
-          artist: 'truyendichai',
+          artist: 'TruyenDichAI',
           album: chapTitle || 'Truyện Dịch AI'
         });
       } catch (_) {}

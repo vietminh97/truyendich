@@ -2109,5 +2109,5 @@ Chỉ trả về bản truyện ngôn tình đã được biên tập hoàn ch�
 
 Không giải thích. Không chú thích. Không nhận xét. Không phân tích. Không nói về quá trình dịch hoặc biên tập. Không thêm tiêu đề chương. Không thêm lời mở đầu. Không thêm lời kết. Không thêm bất kỳ nội dung nào ngoài bản truyện.`},
 
-  {id:'ta-dao', name:'Tà thư', prompt:`Opps... truyendichai không hỗ trợ thể loại này. 🤭`}
+  {id:'ta-dao', name:'Tà thư', prompt:`Opps... TruyenDichAI không hỗ trợ thể loại này. 🤭`}
 ];
