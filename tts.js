@@ -2105,7 +2105,7 @@
     const myToken = state.token;
 
     // Fast path: Check if chunk i was ALREADY preloaded into standby player
-    const isPreloadedInStandby = (preloadedChunkIdx === i);
+    let isPreloadedInStandby = (preloadedChunkIdx === i);
 
     if (!isPreloadedInStandby) {
       setUIState('loading');
@@ -2133,7 +2133,7 @@
     stopTransitionMonitor();
 
     // Check if chunk i was preloaded into standby player
-    const isPreloadedInStandby = (preloadedChunkIdx === i);
+    isPreloadedInStandby = (preloadedChunkIdx === i);
     preloadedChunkIdx = -1;
 
     // Previous active audio
