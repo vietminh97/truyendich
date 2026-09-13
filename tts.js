@@ -461,8 +461,8 @@
   // ─── Chia văn bản thành từng chunk ──────────────────────
   // Mặc định: mỗi chunk gồm 2 câu (SENTENCES_PER_CHUNK). Nếu chunk ghép được
   // vẫn ngắn hơn MIN_CHUNK_CHARS ký tự thì gộp thêm câu kế tiếp cho đủ độ dài
-  const SENTENCES_PER_CHUNK = 6;
-  const MIN_CHUNK_CHARS = 100;
+  const SENTENCES_PER_CHUNK = 8;
+  const MIN_CHUNK_CHARS = 120;
   // Đánh dấu 1 chunk KHÔNG có nội dung để đọc sau khi đã dọn ký tự đặc biệt
   // (VD: dòng phân cảnh chỉ toàn "***", "____", "———"...) — dùng để phân biệt
   // với trường hợp tổng hợp giọng đọc thật sự lỗi (blob null). Xem getChunkBlob().
@@ -1505,6 +1505,9 @@
       state.speed = mult;
       ui.speedBtns.forEach(b => b.classList.toggle('on', parseFloat(b.dataset.mult) === mult));
       localStorage.setItem('tts_speed', mult);
+      if (typeof updateWebAudioSpeed === 'function') {
+        updateWebAudioSpeed(mult);
+      }
       if (state.audioEl) {
         try {
           state.audioEl.defaultPlaybackRate = mult;
@@ -1550,6 +1553,9 @@
       ui.volumeSliderPanel.value = value;
       ui.volumeNumPanel.textContent = value + '%';
       localStorage.setItem('tts_volume', value);
+      if (typeof updateWebAudioVolume === 'function') {
+        updateWebAudioVolume(state.volume);
+      }
       if (state.audioEl) state.audioEl.volume = state.volume;
     }
     ui.volumeSlider.addEventListener('input', () => syncVolume(ui.volumeSlider.value));
@@ -1954,41 +1960,389 @@
     } catch (_) { /* im lặng bỏ qua nếu không định vị được */ }
   }
 
-  // ─── Dual Audio Double Buffering Engine ──────────────────────────────
+  // ─── Web Audio API Gapless & Silence-Trimming Engine ────────────────────────
   let audioPlayers = [null, null];
-  let activeAudioIdx = 0;
-  let preloadedChunkIdx = -1;
+  let webAudioCtx = null;
+  let webAudioMasterGain = null;
+  let activeAudioSource = null;
+  let scheduledAudioSource = null;
+  let scheduledChunkIdx = -1;
+  let scheduledChunkStartTime = 0;
+  let scheduledChunkDuration = 0;
+  let chunkStartTimeOnClock = 0;
+  let chunkDuration = 0;
+  let chunkElapsedBeforePause = 0;
+  let audioBufferCache = new Map(); // idx -> AudioBuffer (trimmed)
+  let bufferDecodePromises = new Map(); // idx -> Promise<AudioBuffer>
+  let uiSyncTimer = null;
+
+  // 1-second silent WAV base64 loop used to keep mobile background audio session active
+  const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
   function initAudioPlayers() {
     if (!audioPlayers[0]) {
       audioPlayers[0] = new Audio();
-      audioPlayers[1] = new Audio();
       audioPlayers[0].preload = 'auto';
-      audioPlayers[1].preload = 'auto';
     }
     return audioPlayers;
   }
 
   function getActiveAudio() {
     initAudioPlayers();
-    return audioPlayers[activeAudioIdx];
+    return audioPlayers[0];
   }
 
-  function getStandbyAudio() {
-    initAudioPlayers();
-    return audioPlayers[1 - activeAudioIdx];
+  function getWebAudioContext() {
+    if (!webAudioCtx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return null;
+      webAudioCtx = new AudioCtx();
+      webAudioMasterGain = webAudioCtx.createGain();
+      webAudioMasterGain.gain.setValueAtTime(state.volume, webAudioCtx.currentTime);
+      webAudioMasterGain.connect(webAudioCtx.destination);
+    }
+    if (webAudioCtx.state === 'suspended') {
+      webAudioCtx.resume().catch(() => {});
+    }
+    return webAudioCtx;
+  }
+
+  function startBackgroundKeepAlive() {
+    const a = getActiveAudio();
+    if (a) {
+      try {
+        if (!a.src || !a.src.startsWith('data:')) {
+          a.src = SILENT_AUDIO_URI;
+          a.loop = true;
+        }
+        a.play().catch(() => {});
+      } catch (_) {}
+    }
+  }
+
+  function stopBackgroundKeepAlive() {
+    const a = getActiveAudio();
+    if (a) {
+      try { a.pause(); } catch (_) {}
+    }
+  }
+
+  function trimSilenceBuffer(ctx, rawBuffer, threshold = 0.003) {
+    if (!rawBuffer) return null;
+    const channels = rawBuffer.numberOfChannels;
+    const length = rawBuffer.length;
+    const sampleRate = rawBuffer.sampleRate;
+    const margin = Math.floor(sampleRate * 0.01); // 10ms safety margin
+    const fadeSamples = Math.floor(sampleRate * 0.005); // 5ms micro fade-in/out
+
+    let first = 0;
+    let last = length - 1;
+    let foundStart = false;
+
+    for (let i = 0; i < length; i++) {
+      for (let ch = 0; ch < channels; ch++) {
+        if (Math.abs(rawBuffer.getChannelData(ch)[i]) > threshold) {
+          first = Math.max(0, i - margin);
+          foundStart = true;
+          break;
+        }
+      }
+      if (foundStart) break;
+    }
+
+    if (!foundStart) return rawBuffer;
+
+    let foundEnd = false;
+    for (let i = length - 1; i >= first; i--) {
+      for (let ch = 0; ch < channels; ch++) {
+        if (Math.abs(rawBuffer.getChannelData(ch)[i]) > threshold) {
+          last = Math.min(length - 1, i + margin);
+          foundEnd = true;
+          break;
+        }
+      }
+      if (foundEnd) break;
+    }
+
+    const newLen = Math.max(1, last - first + 1);
+    const trimmed = ctx.createBuffer(channels, newLen, sampleRate);
+
+    for (let ch = 0; ch < channels; ch++) {
+      const src = rawBuffer.getChannelData(ch);
+      const dst = trimmed.getChannelData(ch);
+      dst.set(src.subarray(first, last + 1));
+
+      // 5ms micro fade-in
+      const actualFadeIn = Math.min(fadeSamples, newLen);
+      for (let i = 0; i < actualFadeIn; i++) {
+        dst[i] *= (i / actualFadeIn);
+      }
+      // 5ms micro fade-out
+      const actualFadeOut = Math.min(fadeSamples, newLen);
+      for (let i = 0; i < actualFadeOut; i++) {
+        dst[newLen - 1 - i] *= (i / actualFadeOut);
+      }
+    }
+
+    return trimmed;
+  }
+
+  async function getChunkAudioBuffer(i) {
+    if (audioBufferCache.has(i)) return audioBufferCache.get(i);
+    if (bufferDecodePromises.has(i)) return bufferDecodePromises.get(i);
+
+    const promise = (async () => {
+      const blob = await getChunkBlob(i);
+      if (!blob || blob === EMPTY_CHUNK) return blob;
+      const ctx = getWebAudioContext();
+      if (!ctx) return null;
+      const arrayBuffer = await blob.arrayBuffer();
+      const rawBuffer = await ctx.decodeAudioData(arrayBuffer);
+      const trimmed = trimSilenceBuffer(ctx, rawBuffer);
+      audioBufferCache.set(i, trimmed);
+      return trimmed;
+    })();
+
+    bufferDecodePromises.set(i, promise);
+    promise.catch(() => {
+      bufferDecodePromises.delete(i);
+      audioBufferCache.delete(i);
+    });
+    return promise;
+  }
+
+  function stopWebAudioPlayback() {
+    if (uiSyncTimer) {
+      cancelAnimationFrame(uiSyncTimer);
+      uiSyncTimer = null;
+    }
+    if (activeAudioSource) {
+      try { activeAudioSource.stop(); activeAudioSource.disconnect(); } catch (_) {}
+      activeAudioSource = null;
+    }
+    if (scheduledAudioSource) {
+      try { scheduledAudioSource.stop(); scheduledAudioSource.disconnect(); } catch (_) {}
+      scheduledAudioSource = null;
+    }
+    scheduledChunkIdx = -1;
+  }
+
+  function updateWebAudioSpeed(mult) {
+    if (!webAudioCtx || !activeAudioSource) return;
+    try {
+      activeAudioSource.playbackRate.setValueAtTime(mult, webAudioCtx.currentTime);
+    } catch (_) {}
+
+    if (scheduledAudioSource) {
+      try { scheduledAudioSource.stop(); scheduledAudioSource.disconnect(); } catch (_) {}
+      scheduledAudioSource = null;
+      scheduledChunkIdx = -1;
+    }
+
+    const elapsedOnClock = Math.max(0, webAudioCtx.currentTime - chunkStartTimeOnClock);
+    const playedAudioSec = elapsedOnClock * state.speed;
+    const remainingAudioSec = Math.max(0, chunkDuration - playedAudioSec);
+    const newRemainingWallSec = remainingAudioSec / mult;
+
+    chunkStartTimeOnClock = webAudioCtx.currentTime - (playedAudioSec / mult);
+
+    const nextTargetStart = webAudioCtx.currentTime + newRemainingWallSec;
+    scheduleNextChunkGapless(state.idx + 1, nextTargetStart, state.token);
+  }
+
+  function updateWebAudioVolume(vol) {
+    if (webAudioMasterGain && webAudioCtx) {
+      try {
+        webAudioMasterGain.gain.setValueAtTime(vol, webAudioCtx.currentTime);
+      } catch (_) {}
+    }
+  }
+
+  async function scheduleNextChunkGapless(nextIdx, targetStartTime, token) {
+    if (nextIdx >= state.chunks.length || token !== state.token) return;
+    try {
+      const nextBuf = await getChunkAudioBuffer(nextIdx);
+      if (token !== state.token || !nextBuf) return;
+      if (nextBuf === EMPTY_CHUNK) {
+        scheduleNextChunkGapless(nextIdx + 1, targetStartTime, token);
+        return;
+      }
+      if (!webAudioCtx || !state.playing) return;
+
+      const now = webAudioCtx.currentTime;
+      const startTime = Math.max(now, targetStartTime);
+
+      const src = webAudioCtx.createBufferSource();
+      src.buffer = nextBuf;
+      src.playbackRate.value = state.speed;
+      src.connect(webAudioMasterGain);
+      src.start(startTime);
+
+      scheduledAudioSource = src;
+      scheduledChunkIdx = nextIdx;
+      scheduledChunkStartTime = startTime;
+      scheduledChunkDuration = nextBuf.duration;
+    } catch (_) {}
+  }
+
+  function startUISyncLoop(token) {
+    if (uiSyncTimer) cancelAnimationFrame(uiSyncTimer);
+
+    function tick() {
+      if (token !== state.token || !state.playing) return;
+
+      if (webAudioCtx) {
+        const now = webAudioCtx.currentTime;
+
+        // Transitioned to next scheduled chunk on the audio clock
+        if (scheduledAudioSource && scheduledChunkIdx >= 0 && now >= scheduledChunkStartTime) {
+          const newIdx = scheduledChunkIdx;
+          activeAudioSource = scheduledAudioSource;
+          scheduledAudioSource = null;
+          scheduledChunkIdx = -1;
+          chunkStartTimeOnClock = scheduledChunkStartTime;
+          chunkDuration = scheduledChunkDuration;
+          chunkElapsedBeforePause = 0;
+
+          state.idx = newIdx;
+          updateChunkUI();
+          scrollToChunk(newIdx, false);
+          saveResumePoint();
+          updatePositionState();
+
+          if ('mediaSession' in navigator) {
+            try {
+              const chapTitle = (typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) ? S.chapters[S.cur].title : '';
+              navigator.mediaSession.metadata = new MediaMetadata({
+                title: `Đoạn ${newIdx + 1}/${state.chunks.length} - ${chapTitle || document.title}`,
+                artist: 'TruyenDichAI',
+                album: chapTitle || 'Truyện Dịch AI'
+              });
+            } catch (_) {}
+          }
+
+          const nextTargetStart = chunkStartTimeOnClock + (chunkDuration / state.speed);
+          scheduleNextChunkGapless(newIdx + 1, nextTargetStart, token);
+          prefetchWindow(newIdx);
+
+          if (state.autoNext && state.fullChapter && newIdx === Math.max(0, state.chunks.length - 3)) {
+            prepareNextChapter();
+          }
+        } else if (!scheduledAudioSource && activeAudioSource) {
+          // Check if current chunk has reached its natural end
+          const currentExpectedEnd = chunkStartTimeOnClock + (chunkDuration / state.speed);
+          if (now >= currentExpectedEnd) {
+            if (state.idx < state.chunks.length - 1) {
+              playChunk(state.idx + 1);
+              return;
+            } else {
+              // End of chapter
+              if (state.autoNext && state.fullChapter) {
+                finishChapterAutoNext();
+                return;
+              }
+              if (state.fullChapter) clearResumePoint();
+              stopWebAudioPlayback();
+              stopBackgroundKeepAlive();
+              state.playing = false;
+              setUIState('idle');
+              setStatus(state.fullChapter ? 'Đã đọc xong chương.' : 'Đã đọc xong đoạn văn bản.');
+              syncBgmWithTts();
+              return;
+            }
+          }
+        }
+      }
+
+      uiSyncTimer = requestAnimationFrame(tick);
+    }
+
+    uiSyncTimer = requestAnimationFrame(tick);
+  }
+
+  async function resumeWebAudioAtOffset(idx, offsetSeconds) {
+    stopWebAudioPlayback();
+    setUIState('loading');
+    const myToken = state.token;
+    const buf = await getChunkAudioBuffer(idx);
+    if (myToken !== state.token || !buf || buf === EMPTY_CHUNK) return;
+    const ctx = getWebAudioContext();
+    if (!ctx) return;
+
+    const clampedOffset = Math.max(0, Math.min(buf.duration - 0.05, offsetSeconds));
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = state.speed;
+    src.connect(webAudioMasterGain);
+    src.start(now, clampedOffset);
+
+    activeAudioSource = src;
+    chunkStartTimeOnClock = now - (clampedOffset / state.speed);
+    chunkDuration = buf.duration;
+    chunkElapsedBeforePause = clampedOffset;
+
+    state.idx = idx;
+    state.playing = true;
+    setUIState('playing');
+    syncBgmWithTts();
+    startBackgroundKeepAlive();
+    updateChunkUI();
+    updatePositionState();
+
+    const remainingWallSec = (buf.duration - clampedOffset) / state.speed;
+    scheduleNextChunkGapless(idx + 1, now + remainingWallSec, myToken);
+    startUISyncLoop(myToken);
+  }
+
+  function pauseWebAudioPlayback() {
+    if (webAudioCtx && activeAudioSource) {
+      const elapsed = (webAudioCtx.currentTime - chunkStartTimeOnClock) * state.speed;
+      chunkElapsedBeforePause = Math.max(0, Math.min(chunkDuration, elapsed));
+    }
+    stopWebAudioPlayback();
+    stopBackgroundKeepAlive();
+  }
+
+  function resumeWebAudioPlayback() {
+    const ctx = getWebAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    startBackgroundKeepAlive();
+    resumeWebAudioAtOffset(state.idx, chunkElapsedBeforePause);
   }
 
   // Compatible getter for state.audioEl
   Object.defineProperty(state, 'audioEl', {
     get() {
-      return getActiveAudio();
+      const a = getActiveAudio();
+      if (webAudioCtx) {
+        try {
+          Object.defineProperty(a, 'currentTime', {
+            get() {
+              if (activeAudioSource) {
+                return Math.max(0, (webAudioCtx.currentTime - chunkStartTimeOnClock) * state.speed);
+              }
+              return chunkElapsedBeforePause;
+            },
+            set(val) {
+              if (state.idx >= 0) resumeWebAudioAtOffset(state.idx, val);
+            },
+            configurable: true
+          });
+          Object.defineProperty(a, 'duration', {
+            get() { return chunkDuration || 0; },
+            configurable: true
+          });
+        } catch (_) {}
+      }
+      return a;
     },
     set(val) {
       if (val === null) {
-        if (audioPlayers[0]) silenceAudio(audioPlayers[0]);
-        if (audioPlayers[1]) silenceAudio(audioPlayers[1]);
-        preloadedChunkIdx = -1;
+        stopWebAudioPlayback();
+        stopBackgroundKeepAlive();
       }
     },
     configurable: true,
@@ -1997,43 +2351,6 @@
 
   function getAudioElement() {
     return getActiveAudio();
-  }
-
-  async function tryMergeFullChapterAudio(myToken) {
-    if (state.fullChapterAudioReady || state.token !== myToken) return;
-    if (!state.chunks || state.chunks.length <= 1) return;
-
-    for (let k = 0; k < state.chunks.length; k++) {
-      if (!state.cache.has(k)) return;
-    }
-
-    try {
-      const promises = [];
-      for (let k = 0; k < state.chunks.length; k++) {
-        promises.push(state.cache.get(k));
-      }
-      const blobs = await Promise.all(promises);
-      if (state.token !== myToken) return;
-
-      const validBlobs = [];
-      for (let k = 0; k < blobs.length; k++) {
-        const b = blobs[k];
-        if (b && b !== EMPTY_CHUNK) {
-          validBlobs.push(b);
-        }
-      }
-
-      if (!validBlobs.length) return;
-
-      const mergedBlob = new Blob(validBlobs, { type: 'audio/mpeg' });
-      state.fullChapterBlob = mergedBlob;
-      state.fullChapterAudioReady = true;
-    } catch (_) {}
-  }
-
-  function prefetchFullChapter(startIndex = 0, myToken) {
-    if (!state.chunks || !state.chunks.length || state.token !== myToken) return;
-    prefetchWindow(startIndex);
   }
 
   function playNextChapter() {
@@ -2057,17 +2374,34 @@
   }
 
   function seekAudioRelative(seconds) {
-    const curAudio = getActiveAudio();
-    if (!curAudio) return;
-    const cur = curAudio.currentTime || 0;
-    const dur = curAudio.duration || 0;
-    let target = cur + seconds;
+    if (!webAudioCtx || !activeAudioSource) {
+      const curAudio = getActiveAudio();
+      if (!curAudio) return;
+      const cur = curAudio.currentTime || 0;
+      const dur = curAudio.duration || 0;
+      let target = cur + seconds;
+      if (target < 0) {
+        if (state.idx > 0) playChunk(state.idx - 1, true);
+        else { curAudio.currentTime = 0; updatePositionState(); }
+      } else if (dur > 0 && target >= dur) {
+        if (state.idx < state.chunks.length - 1) playChunk(state.idx + 1, true);
+        else playNextChapter();
+      } else {
+        curAudio.currentTime = target;
+        updatePositionState();
+      }
+      return;
+    }
+
+    const currentPos = Math.max(0, (webAudioCtx.currentTime - chunkStartTimeOnClock) * state.speed);
+    const dur = chunkDuration;
+    let target = currentPos + seconds;
+
     if (target < 0) {
       if (state.idx > 0) {
         playChunk(state.idx - 1, true);
       } else {
-        curAudio.currentTime = 0;
-        updatePositionState();
+        resumeWebAudioAtOffset(state.idx, 0);
       }
     } else if (dur > 0 && target >= dur) {
       if (state.idx < state.chunks.length - 1) {
@@ -2076,21 +2410,19 @@
         playNextChapter();
       }
     } else {
-      curAudio.currentTime = target;
-      updatePositionState();
+      resumeWebAudioAtOffset(state.idx, target);
     }
   }
 
   function updatePositionState() {
-    const curAudio = getActiveAudio();
-    if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && curAudio) {
+    if ('mediaSession' in navigator && navigator.mediaSession.setPositionState) {
       try {
-        const dur = curAudio.duration;
-        const pos = curAudio.currentTime;
+        const dur = chunkDuration;
+        const pos = webAudioCtx && activeAudioSource ? Math.max(0, (webAudioCtx.currentTime - chunkStartTimeOnClock) * state.speed) : 0;
         if (!isNaN(dur) && !isNaN(pos) && dur > 0) {
           navigator.mediaSession.setPositionState({
             duration: dur,
-            playbackRate: curAudio.playbackRate || 1,
+            playbackRate: state.speed || 1,
             position: Math.min(pos, dur)
           });
         }
@@ -2103,29 +2435,31 @@
     if (i >= state.chunks.length) {
       if (state.autoNext && state.fullChapter) return finishChapterAutoNext();
       if (state.fullChapter) clearResumePoint();
+      stopWebAudioPlayback();
+      stopBackgroundKeepAlive();
       state.playing = false;
       setUIState('idle');
       setStatus(state.fullChapter ? 'Đã đọc xong chương.' : 'Đã đọc xong đoạn văn bản.');
       syncBgmWithTts();
       return;
     }
+
     state.idx = i;
     updateChunkUI();
     scrollToChunk(i, forceScroll);
     const myToken = state.token;
 
-    // Fast path: Check if chunk i was ALREADY preloaded into standby player
-    const isPreloadedInStandby = (preloadedChunkIdx === i);
+    stopWebAudioPlayback();
 
-    if (!isPreloadedInStandby) {
-      setUIState('loading');
-    }
+    const ctx = getWebAudioContext();
+    if (!ctx) return;
 
-    const blob = await getChunkBlob(i);
+    setUIState('loading');
+    const trimmedBuf = await getChunkAudioBuffer(i);
     if (myToken !== state.token) return;
 
-    if (blob === EMPTY_CHUNK) return playChunk(i + 1);
-    if (!blob) {
+    if (trimmedBuf === EMPTY_CHUNK) return playChunk(i + 1);
+    if (!trimmedBuf) {
       state.consecutiveFailures++;
       if (state.consecutiveFailures >= MAX_CONSECUTIVE_SYNTH_FAILURES
           || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
@@ -2139,63 +2473,23 @@
     state.consecutiveFailures = 0;
     saveResumePoint();
 
-    initAudioPlayers();
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = trimmedBuf;
+    src.playbackRate.value = state.speed;
+    src.connect(webAudioMasterGain);
+    src.start(now);
 
-    // Pause standby audio if it was playing previously
-    const standby = getStandbyAudio();
-    try { standby.pause(); } catch (_) {}
+    activeAudioSource = src;
+    chunkStartTimeOnClock = now;
+    chunkDuration = trimmedBuf.duration;
+    chunkElapsedBeforePause = 0;
 
-    // Switch active player if preloaded in standby
-    if (isPreloadedInStandby) {
-      activeAudioIdx = 1 - activeAudioIdx;
-      preloadedChunkIdx = -1;
-    }
-
-    const audio = getActiveAudio();
-
-    if (!isPreloadedInStandby) {
-      if (audio.src && audio.src.startsWith('blob:')) {
-        try { URL.revokeObjectURL(audio.src); } catch (_) {}
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      audio.src = blobUrl;
-      audio.load();
-    }
-
-    audio.volume = state.volume;
-    try {
-      audio.defaultPlaybackRate = state.speed;
-      audio.playbackRate = state.speed;
-    } catch (_) {}
-
-    audio.onloadedmetadata = () => {
-      try {
-        audio.playbackRate = state.speed;
-      } catch (_) {}
-    };
-
-    let transitionDone = false;
-    const triggerNextChunk = () => {
-      if (transitionDone || myToken !== state.token) return;
-      transitionDone = true;
-      playChunk(i + 1);
-    };
-
-    audio.onended = triggerNextChunk;
-    audio.onerror = () => {
-      if (myToken === state.token && !transitionDone) {
-        transitionDone = true;
-        playChunk(i + 1);
-      }
-    };
-
-    audio.ontimeupdate = () => {
-      if (myToken !== state.token) return;
-      updatePositionState();
-      if (audio.duration > 0 && audio.currentTime >= audio.duration - 0.06) {
-        triggerNextChunk();
-      }
-    };
+    state.playing = true;
+    setUIState('playing');
+    syncBgmWithTts();
+    startBackgroundKeepAlive();
+    updatePositionState();
 
     if ('mediaSession' in navigator) {
       try {
@@ -2208,56 +2502,17 @@
       } catch (_) {}
     }
 
-    const playPromise = audio.play();
-    if (playPromise && playPromise.catch) {
-      playPromise.then(() => {
-        if (myToken === state.token) {
-          try { audio.playbackRate = state.speed; } catch (_) {}
-        }
-      }).catch((err) => {
-        console.warn('Audio play error:', err);
-        if (myToken === state.token) {
-          if (err && err.name === 'NotAllowedError') {
-            state.playing = false;
-            setUIState('paused');
-            setStatus('Tạm dừng (Bấm nút Phát để tiếp tục nghe).');
-          } else {
-            triggerNextChunk();
-          }
-        }
-      });
-    }
-
-    state.playing = true;
-    setUIState('playing');
-    syncBgmWithTts();
-
     prefetchWindow(i);
 
-    // GAPLESS DOUBLE-BUFFER PRE-LOADING FOR CHUNK (i + 1)
-    const nextIdx = i + 1;
-    if (nextIdx < state.chunks.length) {
-      getChunkBlob(nextIdx).then(nextBlob => {
-        if (myToken !== state.token || !nextBlob || nextBlob === EMPTY_CHUNK) return;
-        const targetStandby = getStandbyAudio();
-        if (targetStandby.src && targetStandby.src.startsWith('blob:')) {
-          try { URL.revokeObjectURL(targetStandby.src); } catch (_) {}
-        }
-        const standbyUrl = URL.createObjectURL(nextBlob);
-        targetStandby.src = standbyUrl;
-        targetStandby.volume = state.volume;
-        try {
-          targetStandby.defaultPlaybackRate = state.speed;
-          targetStandby.playbackRate = state.speed;
-        } catch (_) {}
-        targetStandby.load();
-        preloadedChunkIdx = nextIdx;
-      }).catch(() => {});
-    }
+    // Schedule next chunk seamlessly (0ms gap)
+    const nextTargetStart = now + (chunkDuration / state.speed);
+    scheduleNextChunkGapless(i + 1, nextTargetStart, myToken);
 
     if (state.autoNext && state.fullChapter && i === Math.max(0, state.chunks.length - 3)) {
       prepareNextChapter();
     }
+
+    startUISyncLoop(myToken);
   }
 
   // Chuẩn bị trước chương kế tiếp: đợi bản dịch sẵn sàng, tách chunk và
@@ -2595,6 +2850,9 @@
     state.token++;
     clearPrefetchQueue();
     state.cache.clear();
+    stopWebAudioPlayback();
+    audioBufferCache.clear();
+    bufferDecodePromises.clear();
     state.nextChap = null;
     state.fullChapter = fullChapter;
     state.chapterDetached = false;
@@ -2621,6 +2879,9 @@
     state.token++;
     clearPrefetchQueue();
     state.cache.clear();
+    stopWebAudioPlayback();
+    audioBufferCache.clear();
+    bufferDecodePromises.clear();
     state.nextChap = null;
     state.fullChapter = true;
     state.consecutiveFailures = 0;
@@ -2633,6 +2894,10 @@
   function stopReading(msg) {
     state.token++;
     clearPrefetchQueue();
+    stopWebAudioPlayback();
+    stopBackgroundKeepAlive();
+    audioBufferCache.clear();
+    bufferDecodePromises.clear();
     if (state.audioEl) {
       const prevSrc = state.audioEl.src;
       silenceAudio(state.audioEl);
@@ -2659,17 +2924,21 @@
     if (!text) { setStatus('Chưa có nội dung để đọc.'); return; }
     // Mẹo bôi đen văn bản — chỉ hiện lần đầu nhấn nút Phát (hàm định nghĩa trong index.html).
     if (typeof window.showPlayTipOnce === 'function') window.showPlayTipOnce();
+    const ctx = getWebAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
     startReading(text);
   }
 
   function onPauseClick() {
     if (state.playing) {
-      state.audioEl?.pause();
+      pauseWebAudioPlayback();
       state.playing = false;
       setUIState('paused');
       syncBgmWithTts();
-    } else if (state.audioEl && state.idx >= 0) {
-      state.audioEl.play().catch(() => {});
+    } else if (state.idx >= 0) {
+      resumeWebAudioPlayback();
       state.playing = true;
       setUIState('playing');
       syncBgmWithTts();
