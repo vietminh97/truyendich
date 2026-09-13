@@ -150,6 +150,55 @@
   overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 
+/* ── Thanh thông báo trạng thái tải audio ── */
+.tts-loading-banner {
+  display: flex; flex-direction: column; gap: 5px;
+  width: 100%; box-sizing: border-box;
+  background: var(--tts-bg2);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--tts-bd);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  opacity: 0; transform: translateY(8px) scale(.96); pointer-events: none;
+  transition: opacity .25s ease, transform .25s cubic-bezier(.34,1.3,.4,1), height .25s ease, margin-bottom .25s ease;
+  height: 0; margin-bottom: 0; padding: 0 14px;
+  overflow: hidden;
+}
+.tts-loading-banner.show {
+  opacity: 1; transform: translateY(0) scale(1); pointer-events: auto;
+  height: auto; margin-bottom: 6px; padding: 8px 14px 7px;
+}
+.tts-loading-content {
+  display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--tts-txt);
+}
+.tts-loading-spinner {
+  width: 12px; height: 12px;
+  border: 2px solid rgba(255,255,255,.2);
+  border-top-color: var(--tts-ac);
+  border-radius: 50%;
+  animation: tts-spin .7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes tts-spin {
+  to { transform: rotate(360deg); }
+}
+.tts-loading-text {
+  flex: 1 1 auto; font-weight: 500; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; color: var(--tts-ac2);
+}
+.tts-loading-pct {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px; font-weight: 600; color: var(--tts-txt2); flex-shrink: 0;
+}
+.tts-loading-track {
+  width: 100%; height: 3px; background: rgba(255,255,255,.08); border-radius: 2px; overflow: hidden;
+}
+.tts-loading-fill {
+  width: 0%; height: 100%;
+  background: linear-gradient(90deg, var(--tts-ac) 0%, #818cf8 100%);
+  border-radius: 2px; transition: width .2s ease;
+}
+
 /* ── cụm play / prev / next ── */
 .tts-transport { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
 .tts-tbtn {
