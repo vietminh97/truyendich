@@ -53,16 +53,42 @@
   overflow: hidden; /* để .tts-prog bị cắt khít theo đúng góc bo tròn của thanh, thay vì nổi thành viên "thuốc" lơ lửng */
 }
 
-/* thanh tiến trình đoạn văn bản hiện tại — dải mỏng khít sát mép trên, được
-   .tts-bar (overflow:hidden) cắt theo đúng góc bo tròn nên không cần tự bo
-   góc/inset riêng nữa. */
+/* thanh tiến trình cả chương — tương tác click/kéo để tua nhanh */
 .tts-prog {
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 3px;
-  background: transparent;
+  height: 5px;
+  background: rgba(255, 255, 255, .08);
+  cursor: pointer;
+  transition: height .15s ease;
+  z-index: 10;
 }
-.tts-prog-fill { height: 100%; width: 0%; background: var(--tts-ac); transition: width .4s; }
+.tts-prog:hover {
+  height: 8px;
+}
+.tts-prog-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--tts-ac);
+  border-radius: 0 2px 2px 0;
+  transition: width .15s linear;
+}
+
+/* Hiển thị thời gian số (mm:ss / mm:ss) */
+.tts-time-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  user-select: none;
+}
+.tts-time {
+  font-size: 11px;
+  font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--tts-txt3);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
 
 /* ── hàng nhỏ "Đang phát Chương N: ..." — mở rộng LÊN TRÊN thanh chính (đặt
    trước .tts-bar trong DOM nên xếp phía trên nó theo luồng bình thường),
@@ -351,20 +377,22 @@ input[type="range"]::-moz-range-thumb { width: 13px; height: 13px; border-radius
 ============================================================ */
 @media (max-width: 620px) {
   #tts-root { padding: 0 10px 17px; }
-  .tts-bar { flex-wrap: wrap; padding: 10px 10px 8px; row-gap: 8px; }
+  .tts-bar { flex-wrap: wrap; padding: 12px 10px 8px; row-gap: 8px; }
   .tts-divider { display: none; }
 
-  /* dòng 1: prev/play/next bên trái → icon trạng thái ngay sau đó → âm
-     lượng lấp đầy khoảng trống còn lại → cài đặt/đóng sát mép phải. */
-  .tts-transport { order: 1; flex-shrink: 0; }
-  .tts-status-row { order: 2; flex-shrink: 0; margin-left: 0; margin-right: 8px; }
-  .tts-vol-wrap { order: 3; flex: 1 1 40px; min-width: 0; }
-  .tts-vol-slider { width: 100%; min-width: 0; }
+  /* dòng 1: transport bên trái → thời gian → icon trạng thái → cài đặt/đóng sát mép phải */
+  .tts-transport { order: 1; flex-shrink: 0; gap: 2px; }
+  .tts-transport .tts-tbtn { width: 28px; height: 28px; }
+  .tts-transport .tts-tbtn-play { width: 36px; height: 36px; }
+  .tts-time-wrap { order: 2; flex: 1 1 auto; margin-left: 2px; }
+  .tts-time { font-size: 10px; }
+  .tts-status-row { order: 3; flex-shrink: 0; margin-left: 0; margin-right: 4px; }
+  .tts-vol-wrap { display: none; }
   .tts-right { order: 4; margin-left: 0; flex-shrink: 0; }
 
   /* dòng 2: cụm tốc độ — xuống dòng riêng, các nút chia đều hết chiều ngang */
   .tts-speed-wrap { order: 5; width: 100%; padding-top: 6px; border-top: 1px solid var(--tts-bd); overflow-x: visible; }
-  .tts-speed-wrap .tts-spd { flex: 1 1 0; text-align: center; padding-left: 4px; padding-right: 4px; }
+  .tts-speed-wrap .tts-spd { flex: 1 1 0; text-align: center; padding-left: 2px; padding-right: 2px; font-size: 11px; }
 
   .tts-settings { right: -4px; }
 }

@@ -58,6 +58,8 @@
   // play/prev/next mới (xem .tts-transport trong tts.css).
   const ICON_PREV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>';
   const ICON_NEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>';
+  const ICON_BACK10 = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/><text x="12" y="15" text-anchor="middle" font-size="8" font-family="system-ui,sans-serif" font-weight="bold" stroke="none" fill="currentColor">10</text></svg>';
+  const ICON_FORWARD10 = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/><text x="12" y="15" text-anchor="middle" font-size="8" font-family="system-ui,sans-serif" font-weight="bold" stroke="none" fill="currentColor">10</text></svg>';
   const ICON_LIGHTNING = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
   const ICON_VOLUME = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
   // Icon trạng thái (chấm tròn cũ đổi thành sóng âm 4 vạch) — đổi màu theo
@@ -884,63 +886,26 @@
 
   // ─── State & playback ────────────────────────────────────────────────────────
   const state = {
-    chunks: [], idx: -1, playing: false, audioEl: null,
-    voice: DEFAULT_VOICE, speed: DEFAULT_SPEED,
-    volume: DEFAULT_VOLUME / 100, autoNext: true,
-    // Tự cuộn trang theo đoạn đang đọc — mặc định bật, có thể tắt trong Cài đặt.
-    scrollWithAudio: true,
-    // Đánh dấu (highlight <mark>) đoạn đang đọc — tách riêng khỏi tự cuộn,
-    // mặc định bật, có thể tắt trong Cài đặt.
-    markAudio: true,
-    cache: new Map(), token: 0, uiState: 'idle',
-    bgmOn: true, bgmVolume: DEFAULT_BGM_VOLUME / 100, bgmTrack: DEFAULT_BGM_TRACK,
-    // Chương kế tiếp được chuẩn bị TRƯỚC (nav + tách chunk + prefetch vài
-    // chunk đầu) ngay khi bắt đầu phát chunk áp chót của chương hiện tại,
-    // để lúc chương hiện tại đọc xong có thể phát tiếp ngay, không phải
-    // chờ chuyển chương + tổng hợp giọng đọc từ đầu. Xem prepareNextChapter().
+    playing: false,
+    voice: DEFAULT_VOICE,
+    speed: DEFAULT_SPEED,
+    volume: DEFAULT_VOLUME / 100,
+    autoNext: true,
+    token: 0,
+    uiState: 'idle',
+    bgmOn: true,
+    bgmVolume: DEFAULT_BGM_VOLUME / 100,
+    bgmTrack: DEFAULT_BGM_TRACK,
     nextChap: null,
-    // true = đang đọc TOÀN BỘ chương (từ nút Phát/Đọc tiếp) → hết chương thì
-    // tự chuyển chương kế nếu autoNext bật. false = chỉ đọc một đoạn được
-    // chọn thủ công (bôi đen → "Đọc văn bản"/"Đọc từ đây") → đọc hết đoạn là
-    // dừng lại, KHÔNG tự chuyển chương vì thường mới hết một phần nhỏ trong
-    // chương, chưa hết chương thật.
     fullChapter: true,
-    // Dùng để phát hiện khi người dùng tự tay chuyển chương/đổi truyện khác
-    // (không phải do chính TTS tự next chương) — xem watchExternalChapterChange().
     expectedCur: null,
     expectedChaptersRef: null,
-    // Chữ ký nội dung (không phải tham chiếu object) của chương đang mong
-    // đợi/đang phát — xem chapterSignature(). Dùng thay cho so sánh
-    // expectedChaptersRef/playingChaptersRef bằng "===" vì trang web có thể
-    // tự tạo lại mảng S.chapters (tham chiếu mới) dù nội dung y hệt, ví dụ
-    // chỉ vì mở/đóng Cài đặt hoặc quay lại đúng truyện cũ — nếu so bằng
-    // tham chiếu thì hai trường hợp đó sẽ báo sai là "đổi chương".
     expectedSig: null,
-    // true = người dùng đã rời khỏi chương đang phát (tự tay chuyển sang
-    // chương khác trong khi audio vẫn đang đọc nốt chương cũ). Chương đang
-    // đọc sẽ được đọc hết chứ không dừng ngay, nhưng KHÔNG tự chuyển sang
-    // chương kế tiếp nữa dù "Tự động chuyển chương" vẫn bật, và nút Tạm dừng
-    // đổi thành nút Dừng (đỏ) — xem watchExternalChapterChange, playChunk,
-    // setUIState.
     chapterDetached: false,
-    // Chương thực sự đang được audio đọc (S.cur/S.chapters tại thời điểm
-    // playChunk bắt đầu chương đó) — khác với expectedCur/expectedChaptersRef
-    // ở trên (chỉ theo dõi chương app đang HIỂN THỊ). Dùng để nhận biết khi
-    // người dùng quay trở lại đúng chương đang phát thì bỏ trạng thái
-    // chapterDetached, đổi nút Dừng về lại Tạm dừng — xem syncPlayingChapter,
-    // watchExternalChapterChange.
     playingCur: null,
     playingChaptersRef: null,
     playingSig: null,
-    // Đếm số chunk LIÊN TIẾP tổng hợp giọng đọc thất bại (getChunkBlob trả
-    // về null) — dùng để phát hiện mất mạng/lỗi server kéo dài, xem
-    // MAX_CONSECUTIVE_SYNTH_FAILURES và nhánh xử lý trong playChunk(). Reset
-    // về 0 mỗi khi có 1 chunk tổng hợp thành công, hoặc mỗi lần bắt đầu
-    // phiên đọc mới (startReading/startReadingBackground/stopReading).
-    consecutiveFailures: 0,
     fullChapterBlob: null,
-    isFullChapterPlaying: false,
-    fullChapterAudioReady: false,
   };
 
   // ─── Nhạc nền (archive.org) ────────────────────────────────────────────
@@ -996,53 +961,6 @@
     return el ? el.innerText.trim() : '';
   }
 
-  const PREFETCH_CONCURRENCY = 4;
-  let activePrefetches = 0;
-  const prefetchQueue = [];
-
-  function processPrefetchQueue() {
-    if (!prefetchQueue.length || activePrefetches >= PREFETCH_CONCURRENCY) return;
-    const idx = prefetchQueue.shift();
-    if (idx < 0 || !state.chunks || idx >= state.chunks.length || state.cache.has(idx)) {
-      processPrefetchQueue();
-      return;
-    }
-
-    activePrefetches++;
-    const p = getChunkBlob(idx);
-    p.finally(() => {
-      activePrefetches--;
-      processPrefetchQueue();
-    });
-
-    processPrefetchQueue();
-  }
-
-  function prefetch(i) {
-    if (i >= 0 && state.chunks && i < state.chunks.length && !state.cache.has(i)) {
-      if (!prefetchQueue.includes(i)) {
-        prefetchQueue.push(i);
-        processPrefetchQueue();
-      }
-    }
-  }
-
-  function prefetchWindow(currentIndex) {
-    if (!state.chunks) return;
-    const depth = prefetchDepthForVoice(state.voice);
-    for (let k = 1; k <= depth; k++) {
-      const targetIdx = currentIndex + k;
-      if (targetIdx < state.chunks.length) {
-        prefetch(targetIdx);
-      }
-    }
-  }
-
-  function clearPrefetchQueue() {
-    prefetchQueue.length = 0;
-    activePrefetches = 0;
-  }
-
   async function synthesizeWithRetry(text, voice, rate, raceCount = 4, maxRetries = 3) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const blob = await synthesize(text, voice, rate, raceCount);
@@ -1054,19 +972,64 @@
     return null;
   }
 
-  function getChunkBlob(i) {
-    if (state.cache.has(i)) return state.cache.get(i);
-    const raceCount = i === 0 ? CHUNK0_RACE_SERVERS : 4;
-    const speechText = sanitizeText(preprocessNumbersForTTS(state.chunks[i]));
-    if (!speechText.trim()) {
-      const p = Promise.resolve(EMPTY_CHUNK);
-      state.cache.set(i, p);
-      return p;
+  function splitChapterIntoBlocks(text, maxChars = 700) {
+    if (!text) return [];
+    const sentences = splitIntoSentences(text);
+    const blocks = [];
+    let cur = '';
+    for (const s of sentences) {
+      const trimmed = s.trim();
+      if (!trimmed) continue;
+      if (cur && (cur.length + trimmed.length + 1 > maxChars)) {
+        blocks.push(cur.trim());
+        cur = trimmed;
+      } else {
+        cur = cur ? (cur + ' ' + trimmed) : trimmed;
+      }
     }
-    const p = synthesizeWithRetry(speechText, state.voice, SYNTH_RATE, raceCount, 2);
-    p.then(blob => { if (!blob) state.cache.delete(i); });
-    state.cache.set(i, p);
-    return p;
+    if (cur.trim()) blocks.push(cur.trim());
+    return blocks;
+  }
+
+  async function synthesizeBlocksParallel(blocks, myToken, onProgress) {
+    const n = blocks.length;
+    const blobs = new Array(n).fill(null);
+    let completed = 0;
+    const isTikTok = VOICE_ENGINE.get(state.voice) === 'tiktok';
+    const concurrency = isTikTok ? 1 : 6;
+    let queueIdx = 0;
+
+    async function worker() {
+      while (queueIdx < n) {
+        if (myToken !== state.token) return;
+        const i = queueIdx++;
+        const blockText = blocks[i];
+        const speechText = sanitizeText(preprocessNumbersForTTS(blockText));
+        if (!speechText.trim()) {
+          completed++;
+          if (onProgress) onProgress(completed, n);
+          continue;
+        }
+
+        const raceCount = (i === 0) ? CHUNK0_RACE_SERVERS : 3;
+        const blob = await synthesizeWithRetry(speechText, state.voice, SYNTH_RATE, raceCount, 2);
+        if (myToken !== state.token) return;
+        blobs[i] = blob;
+        completed++;
+        if (onProgress) onProgress(completed, n);
+      }
+    }
+
+    const workers = [];
+    for (let w = 0; w < Math.min(concurrency, n); w++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+
+    if (myToken !== state.token) return null;
+    const validBlobs = blobs.filter(Boolean);
+    if (!validBlobs.length) return null;
+    return new Blob(validBlobs, { type: 'audio/mpeg' });
   }
 
   // Sinh HTML cho cụm nút tốc độ từ 1 bộ mốc (SPEED_STEPS hoặc SPEED_STEPS_ALT),
@@ -1148,31 +1111,12 @@
             </label>
           </div>
 
-          <div class="tts-set-row">
-            <label class="tts-switch-row" id="tts-markaudio-row">
-              <span class="tts-switch-row-label"><span class="tts-mini-ic">${ICON_HIGHLIGHT}</span>Nổi bật đoạn văn</span>
-              <span class="tts-switch on" id="tts-markaudio">
-                <span class="tts-switch-track"></span>
-                <span class="tts-switch-thumb"></span>
-              </span>
-            </label>
-          </div>
-
-          <div class="tts-set-row">
-            <label class="tts-switch-row" id="tts-scrollaudio-row">
-              <span class="tts-switch-row-label"><span class="tts-mini-ic">${ICON_FOLLOWSCROLL}</span>Tự động cuộn</span>
-              <span class="tts-switch on" id="tts-scrollaudio">
-                <span class="tts-switch-track"></span>
-                <span class="tts-switch-thumb"></span>
-              </span>
-            </label>
           </div>
         </div>
 
         <!-- Hàng nhỏ mở rộng LÊN TRÊN thanh chính (đặt trước .tts-bar trong
              DOM để xếp phía trên nó theo luồng bình thường) — chỉ hiện khi
-             người dùng đã tự tay rời sang xem chương khác trong lúc audio
-             vẫn đang đọc nốt chương cũ (chapterDetached) hoặc đã tự next
+             người dùng đã rời khỏi chương đang phát (chapterDetached) hoặc đã tự next
              sang chương kế ở chế độ nền (không đổi trang hiển thị) — xem
              updateDetachedRow() trong tts.js. Bấm vào để quay lại đúng
              chương đang phát. -->
@@ -1181,23 +1125,27 @@
           <span class="tts-detached-label" id="tts-detached-label"></span>
         </button>
 
-        <!-- Hàng "Nghe tiếp đoạn dang dở?" — cùng kiểu dáng với hàng "Đang
-             phát ..." ở trên (dùng chung class .tts-detached-row). Chỉ hiện
-             khi thanh đang mở, không có gì đang đọc, và đúng chương dang dở
-             đã lưu đang được mở lại — xem updateResumeRow() trong tts.js.
-             Bấm vào để đọc tiếp đúng từ đoạn đã dừng (resumeSavedPoint()). -->
+        <!-- Hàng "Nghe tiếp đoạn dang dở?" — bấm vào để đọc tiếp đúng từ giây đã dừng -->
         <button type="button" class="tts-detached-row" id="tts-resume-row">
           <span class="tts-detached-ico">${ICON_STATUS_WAVE}</span>
           <span class="tts-detached-label">Nghe tiếp đoạn dang dở?</span>
         </button>
 
         <div class="tts-bar" id="tts-bar-el">
-          <div class="tts-prog"><div id="tts-progress-bar" class="tts-prog-fill"></div></div>
+          <div class="tts-prog" id="tts-prog-track" title="Kéo hoặc bấm để tua">
+            <div id="tts-progress-bar" class="tts-prog-fill"></div>
+          </div>
 
           <div class="tts-transport">
-            <button class="tts-tbtn" id="tts-prev" disabled title="Đoạn trước">${ICON_PREV}</button>
+            <button class="tts-tbtn" id="tts-prev" title="Chương trước">${ICON_PREV}</button>
+            <button class="tts-tbtn" id="tts-back10" title="Lùi 10 giây">${ICON_BACK10}</button>
             <button class="tts-tbtn tts-tbtn-play" id="tts-playpause" title="Phát">${ICON_PLAY}</button>
-            <button class="tts-tbtn" id="tts-next" title="Đoạn sau">${ICON_NEXT}</button>
+            <button class="tts-tbtn" id="tts-forward10" title="Tới 10 giây">${ICON_FORWARD10}</button>
+            <button class="tts-tbtn" id="tts-next" title="Chương sau">${ICON_NEXT}</button>
+          </div>
+
+          <div class="tts-time-wrap">
+            <span class="tts-time" id="tts-time-display">00:00 / 00:00</span>
           </div>
 
           <div class="tts-status-row">
@@ -1305,10 +1253,14 @@
     ui = {
       root,
       bar: root.querySelector('#tts-bar-el'),
+      progTrack: root.querySelector('#tts-prog-track'),
       progressBar: root.querySelector('#tts-progress-bar'),
+      timeDisplay: root.querySelector('#tts-time-display'),
       prevBtn: root.querySelector('#tts-prev'),
-      nextBtn: root.querySelector('#tts-next'),
+      back10Btn: root.querySelector('#tts-back10'),
       playPauseBtn: root.querySelector('#tts-playpause'),
+      forward10Btn: root.querySelector('#tts-forward10'),
+      nextBtn: root.querySelector('#tts-next'),
       statusDot: root.querySelector('#tts-status-dot'),
       closeBtn: root.querySelector('#tts-close'),
       detachedRow: root.querySelector('#tts-detached-row'),
@@ -1316,10 +1268,6 @@
       resumeRow: root.querySelector('#tts-resume-row'),
       autoNextRow: root.querySelector('#tts-autonext-row'),
       autoNextBtn: root.querySelector('#tts-autonext'),
-      scrollAudioRow: root.querySelector('#tts-scrollaudio-row'),
-      scrollAudioBtn: root.querySelector('#tts-scrollaudio'),
-      markAudioRow: root.querySelector('#tts-markaudio-row'),
-      markAudioBtn: root.querySelector('#tts-markaudio'),
       speedBtns: [...root.querySelectorAll('.tts-spd')],
       volumeSlider: root.querySelector('#tts-volume'),
       volumeSliderPanel: root.querySelector('#tts-volume-panel'),
@@ -1382,30 +1330,6 @@
     }
     // savedAutoNext === null (chưa từng bấm) → giữ mặc định autoNext:true
     // đã set sẵn ở state ban đầu và class "on" đã có sẵn trong HTML.
-    const savedScrollAudio = localStorage.getItem('tts_scrollaudio');
-    if (savedScrollAudio === '0') {
-      state.scrollWithAudio = false;
-      ui.scrollAudioBtn.classList.remove('on');
-    } else if (savedScrollAudio === '1') {
-      state.scrollWithAudio = true;
-      ui.scrollAudioBtn.classList.add('on');
-    }
-    // savedScrollAudio === null (chưa từng bấm) → giữ mặc định scrollWithAudio:true.
-    // "Nổi bật đoạn văn" — tách riêng khỏi "Tự động cuộn" ở trên. Nếu chưa có
-    // key riêng (tts_markaudio, người dùng cũ nâng cấp lên bản 2 công tắc)
-    // thì kế thừa tạm giá trị từ key cũ tts_scrollaudio để hành vi không đổi
-    // đột ngột; nếu cũng chưa có luôn thì giữ mặc định markAudio:true.
-    const savedMarkAudio = localStorage.getItem('tts_markaudio');
-    if (savedMarkAudio === '0') {
-      state.markAudio = false;
-      ui.markAudioBtn.classList.remove('on');
-    } else if (savedMarkAudio === '1') {
-      state.markAudio = true;
-      ui.markAudioBtn.classList.add('on');
-    } else if (savedScrollAudio === '0') {
-      state.markAudio = false;
-      ui.markAudioBtn.classList.remove('on');
-    }
     const savedBgmVolume = parseInt(localStorage.getItem('tts_bgm_volume'), 10);
     if (!Number.isNaN(savedBgmVolume) && savedBgmVolume >= 0 && savedBgmVolume <= 100) {
       state.bgmVolume = savedBgmVolume / 100;
@@ -1429,14 +1353,9 @@
       ui.bgmToggleBtn.classList.add('on');
       ui.bgmTrigger.disabled = false;
       ui.bgmVolRow.classList.remove('disabled');
-      // Không playBgm() ở đây — nhạc nền chỉ phát khi TTS thực sự bắt đầu đọc.
-      // Nhưng vẫn prewarm (tải trước, không phát) để lúc bấm Phát là có ngay.
       prewarmBgm();
     }
 
-    // tô đường viền tiêu điểm tất cả input range theo accent — dùng thuộc
-    // tính accent-color của trình duyệt (đã đặt trong CSS), không cần JS
-    // vẽ gradient thủ công như bản demo gốc.
     ui.playPauseBtn.addEventListener('click', onPlayPauseClick);
     ui.closeBtn.addEventListener('click', () => {
       stopReading('');
@@ -1448,67 +1367,37 @@
       if (ttsBarResizeObserver) ttsBarResizeObserver.disconnect();
       window.removeEventListener('resize', syncTtsBarHeight);
     });
-    ui.prevBtn.addEventListener('click', () => { if (state.idx > 0) playChunk(state.idx - 1, true); });
-    ui.nextBtn.addEventListener('click', () => {
-      if (state.idx < state.chunks.length - 1) {
-        playChunk(state.idx + 1, true);
-        return;
-      }
-      // Đang ở chunk cuối cùng của chương — không cần đợi audio phát hết mới
-      // tự chuyển chương (autoNext) nữa: bấm "Đoạn sau" ở đây sẽ chuyển ngay
-      // sang chương kế tiếp và phát luôn chunk đầu của chương đó. Tái dùng
-      // finishChapterAutoNext() để hưởng luôn phần đã "chuẩn bị trước"
-      // (prepareNextChapter) nếu có, phát mượt không phải chờ tổng hợp lại.
-      if (state.uiState === 'loading') return; // tránh bấm dồn dập trong lúc đang chuyển
-      if (state.fullChapter && typeof S !== 'undefined' && typeof nav === 'function' && S.chapters && S.cur < S.chapters.length - 1) {
-        finishChapterAutoNext();
-      }
-    });
+
+    ui.prevBtn.addEventListener('click', () => playPrevChapter());
+    ui.nextBtn.addEventListener('click', () => playNextChapter());
+    if (ui.back10Btn) ui.back10Btn.addEventListener('click', () => seekAudioRelative(-10));
+    if (ui.forward10Btn) ui.forward10Btn.addEventListener('click', () => seekAudioRelative(10));
+    initSeekTrack(ui.progTrack);
+
     ui.autoNextRow.addEventListener('click', () => {
       state.autoNext = !state.autoNext;
       ui.autoNextBtn.classList.toggle('on', state.autoNext);
       localStorage.setItem('tts_autonext', state.autoNext ? '1' : '0');
     });
-    // Hàng "Đang phát Chương X: ..." — chỉ hiện khi đã rời khỏi chương đang
-    // phát (chapterDetached, xem updateDetachedRow). Bấm vào để nhảy thẳng
-    // về đúng chương đang được audio đọc — dùng playingCur (chương ĐANG
-    // PHÁT), không phải S.cur (chương đang hiển thị lúc này). Chỉ nav(),
-    // không tự cuộn/highlight tới đoạn đang đọc nữa.
+
+    // Hàng "Đang phát Chương X: ..." — chỉ hiện khi đã rời khỏi chương đang phát
     if (ui.detachedRow) {
       ui.detachedRow.addEventListener('click', () => {
         if (typeof nav !== 'function' || state.playingCur == null) return;
         nav(state.playingCur);
       });
     }
-    // Hàng "Nghe tiếp đoạn dang dở?" — bấm vào đọc tiếp từ đúng vị trí đã
-    // lưu (xem resumeSavedPoint()), không nav() vì đã chắc chắn đang ở
-    // đúng chương dang dở rồi (điều kiện hiện hàng này đã kiểm tra sẵn).
+    // Hàng "Nghe tiếp từ mm:ss"
     if (ui.resumeRow) {
       ui.resumeRow.addEventListener('click', () => resumeSavedPoint());
     }
-    ui.scrollAudioRow.addEventListener('click', () => {
-      state.scrollWithAudio = !state.scrollWithAudio;
-      ui.scrollAudioBtn.classList.toggle('on', state.scrollWithAudio);
-      localStorage.setItem('tts_scrollaudio', state.scrollWithAudio ? '1' : '0');
-    });
-    ui.markAudioRow.addEventListener('click', () => {
-      state.markAudio = !state.markAudio;
-      ui.markAudioBtn.classList.toggle('on', state.markAudio);
-      localStorage.setItem('tts_markaudio', state.markAudio ? '1' : '0');
-      if (!state.markAudio) clearChunkHighlight();
-    });
 
-    // ---- tốc độ: nút nhanh trên thanh chính (đã bỏ thanh trượt trùng lặp
-    // trong bảng cài đặt — vốn để tinh chỉnh tốc độ NGHE, nay chỉ còn 1 nơi
-    // duy nhất để chọn tốc độ là cụm nút nhanh trên thanh chính) ----
+    // ---- tốc độ: nút nhanh trên thanh chính ----
     function setSpeed(mult) {
       state.speed = mult;
       ui.speedBtns.forEach(b => b.classList.toggle('on', parseFloat(b.dataset.mult) === mult));
       localStorage.setItem('tts_speed', mult);
-      if (typeof applySpeedToAudio === 'function') {
-        const cur = getActiveAudio();
-        if (cur && state.playing) applySpeedToAudio(cur, mult);
-      }
+      if (chapterAudio && state.playing) applySpeedToAudio(chapterAudio, mult);
       updatePositionState();
     }
     ui.speedBtns.forEach(btn => btn.addEventListener('click', () => setSpeed(parseFloat(btn.dataset.mult))));
@@ -1548,8 +1437,7 @@
       ui.volumeSliderPanel.value = value;
       ui.volumeNumPanel.textContent = value + '%';
       localStorage.setItem('tts_volume', value);
-      if (audioPlayers[0]) audioPlayers[0].volume = state.volume;
-      if (audioPlayers[1]) audioPlayers[1].volume = state.volume;
+      if (chapterAudio) chapterAudio.volume = state.volume;
     }
     ui.volumeSlider.addEventListener('input', () => syncVolume(ui.volumeSlider.value));
     ui.volumeSliderPanel.addEventListener('input', () => syncVolume(ui.volumeSliderPanel.value));
@@ -1617,21 +1505,11 @@
     // Chạy ở cả lúc khôi phục giọng đã lưu (applyLive=false) lẫn khi
     // người dùng chủ động đổi giọng (applyLive=true).
     if (v.engine === 'tiktok') ensureTiktokSocket();
-    if (applyLive) {
-      // Không ngắt chunk đang phát: chỉ xoá cache của các chunk CHƯA phát
-      // (kể cả những chunk đã prefetch sẵn bằng giọng cũ) để chúng được
-      // tổng hợp lại bằng giọng mới. Chunk đang phát (state.idx) giữ
-      // nguyên, nghe hết bằng giọng cũ.
-      for (const key of [...state.cache.keys()]) {
-        if (key !== state.idx) state.cache.delete(key);
-      }
-      // Chủ động fetch NGAY các chunk kế tiếp bằng giọng mới song song với
-      // lúc chunk hiện tại vẫn đang phát — để khi chunk hiện tại đọc xong,
-      // chunk kế đã sẵn sàng, phát nối tiếp luôn chứ không bị khựng lại
-      // chờ tổng hợp giọng đọc giữa 2 chunk.
-      if (state.idx >= 0) {
-        const depth = prefetchDepthForVoice(v.id);
-        for (let k = 1; k <= depth; k++) prefetch(state.idx + k);
+    if (applyLive && state.playing) {
+      const curTime = chapterAudio ? chapterAudio.currentTime : 0;
+      const text = getCurrentText();
+      if (text) {
+        startReading(text, state.fullChapter, curTime);
       }
     }
   }
@@ -1769,222 +1647,50 @@
     }
     updateDetachedRow();
     updateResumeRow();
+    updateNavButtons();
   }
 
-  function updateChunkUI() {
-    const total = state.chunks.length;
-    ui.prevBtn.disabled = state.idx <= 0;
-    const atLastChunk = state.idx >= total - 1;
-    // Còn chương kế tiếp để chuyển sang hay không — nếu có, KHÔNG khoá nút
-    // "Đoạn sau" ở chunk cuối cùng nữa, để bấm là chuyển chương ngay (xem
-    // trình xử lý click của nextBtn), thay vì phải đợi phát hết audio.
-    const hasNextChapter = state.fullChapter && typeof S !== 'undefined' && typeof nav === 'function'
-      && S.chapters && S.cur < S.chapters.length - 1;
-    ui.nextBtn.disabled = atLastChunk && !hasNextChapter;
-    ui.progressBar.style.width = total ? `${((state.idx + 1) / total) * 100}%` : '0%';
-  }
-
-  // Gỡ hẳn <audio> cũ thay vì chỉ pause() rồi bỏ tham chiếu
-  function silenceAudio(a) {
-    if (!a) return;
-    try { a.pause(); } catch (_) {}
-    try {
-      a.onended = null;
-      a.onerror = null;
-      a.removeAttribute('src');
-      a.load();
-    } catch (_) {}
-  }
-
-  // ─── "Cuộn theo audio": tự cuộn trang tới đúng đoạn đang đọc ───────────
-  // Không có sẵn ánh xạ chunk → vị trí DOM, nên dò tìm bằng cách so khớp
-  // đoạn đầu của chunk (đã chuẩn hoá khoảng trắng) với text trong
-  // .reading-content, rồi cuộn tới vị trí đó. Đây là cách dò tương đối —
-  // nếu không khớp được (nội dung có ký tự đặc biệt, HTML lồng phức tạp...)
-  // thì bỏ qua êm, không ảnh hưởng tới việc phát audio.
-  function normalizeForMatch(s) {
-    // Bỏ HẲN mọi khoảng trắng (dấu cách, xuống dòng...) thay vì gộp về 1
-    // dấu cách như trước. Lý do: chunkText được ghép bằng
-    // sentences.join(' ') nên LUÔN có 1 dấu cách ảo giữa 2 câu — kể cả khi
-    // 2 câu đó nằm ở 2 thẻ <p> RIÊNG BIỆT trong DOM, nơi thường KHÔNG có
-    // ký tự khoảng trắng thật nào giữa chúng (HTML kiểu <p>A</p><p>B</p>
-    // không có text node trắng ở giữa). Nếu chunk có nhiều câu ngắn liền
-    // nhau, mỗi câu 1 dòng riêng (VD "Ầm!" x3 rồi mới tới câu tiếp theo),
-    // sự lệch dấu cách này rơi ngay vào 40 ký tự đầu dùng để dò vị trí →
-    // khớp thất bại HOÀN TOÀN (indexOf trả -1), mất luôn highlight cho cả
-    // chunk. Bỏ hết khoảng trắng ở CẢ 2 phía khi so khớp khiến việc so
-    // khớp không còn phụ thuộc vào số khoảng trắng lệch giữa 2 nguồn nữa.
-    return s.replace(/\s+/g, '');
-  }
-  // Gỡ các thẻ <mark> highlight của chunk trước đó, trả lại text node gốc
-  // (unwrap) — PHẢI gọi trước khi dò lại DOM bằng TreeWalker ở dưới, nếu
-  // không map ký tự → node sẽ bị lệch do cấu trúc DOM đã bị .tts-reading-
-  // highlight của lần trước làm thay đổi.
-  function clearChunkHighlight() {
-    if (!chunkHighlightEls.length) return;
-    chunkHighlightEls.forEach(el => {
-      const parent = el.parentNode;
-      if (!parent) return;
-      while (el.firstChild) parent.insertBefore(el.firstChild, el);
-      parent.removeChild(el);
-      parent.normalize();
-    });
-    chunkHighlightEls = [];
-  }
-  // Bọc <mark class="tts-reading-highlight"> quanh đúng đoạn DOM tương ứng
-  // chunk đang đọc, dựa trên map ký tự (mỗi phần tử: node text gốc + offset
-  // trong node đó) đã dựng sẵn từ scrollToChunk. Nếu chunk trải dài qua
-  // nhiều text node (VD cách nhau bởi thẻ <br>/<em>...) thì bọc riêng từng
-  // đoạn liên tục trong cùng 1 node, không gộp qua nhiều node bằng
-  // Range.surroundContents (sẽ lỗi khi range cắt ngang biên thẻ).
-  function highlightChunkRange(map, startIdx, endIdx) {
-    let i = startIdx;
-    while (i <= endIdx) {
-      const node = map[i].node;
-      let j = i;
-      while (j + 1 <= endIdx && map[j + 1].node === node) j++;
-      const startOffset = map[i].offset;
-      const endOffset = Math.min(map[j].offset + 1, node.nodeValue.length);
-      try {
-        const range = document.createRange();
-        range.setStart(node, startOffset);
-        range.setEnd(node, endOffset);
-        const mark = document.createElement('mark');
-        mark.className = 'tts-reading-highlight';
-        range.surroundContents(mark);
-        chunkHighlightEls.push(mark);
-      } catch (_) { /* bỏ qua đoạn này nếu không bọc được, không ảnh hưởng các đoạn khác */ }
-      i = j + 1;
+  function updateNavButtons() {
+    if (!ui) return;
+    if (typeof S !== 'undefined' && S.chapters) {
+      const curChap = state.playingCur != null ? state.playingCur : S.cur;
+      ui.prevBtn.disabled = (curChap <= 0);
+      ui.nextBtn.disabled = (curChap >= S.chapters.length - 1);
     }
   }
-  function scrollToChunk(i, forceScroll) {
-    // 2 công tắc riêng: "Nổi bật đoạn văn" (markAudio, highlight <mark>) và
-    // "Tự động cuộn" (scrollWithAudio) — độc lập với nhau. Luôn dọn highlight
-    // cũ trước khi dò lại DOM; nếu cả 2 đều tắt (và không bị ép cuộn) thì
-    // thoát sớm, khỏi tốn công dò vị trí trong DOM.
-    // forceScroll=true: dùng khi bấm "Đoạn trước"/"Đoạn sau" — luôn cuộn tới
-    // đúng chunk vừa nhảy tới để biết đang ở đâu, bất kể "Tự động cuộn" có
-    // đang bật hay không.
-    clearChunkHighlight();
-    if (!state.markAudio && !state.scrollWithAudio && !forceScroll) return;
-    const chunkText = state.chunks[i];
-    if (!chunkText) return;
-    const container = document.querySelector('#chContent .reading-content');
-    const scrollArea = document.getElementById('readingArea');
-    if (!container || !scrollArea) return;
-    const fullNorm = normalizeForMatch(chunkText);
-    const snippet = fullNorm.slice(0, 40);
-    if (snippet.length < 8) return; // đoạn quá ngắn, không đủ để định vị chính xác
-    try {
-      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-      let normalized = '';
-      const map = [];
-      let node;
-      while ((node = walker.nextNode())) {
-        const raw = node.nodeValue;
-        if (!raw) continue;
-        for (let k = 0; k < raw.length; k++) {
-          const ch = raw[k];
-          // Bỏ hẳn khoảng trắng — không thêm vào normalized/map — để khớp
-          // đúng với normalizeForMatch() giờ cũng bỏ hết khoảng trắng ở
-          // phía chunkText (xem lý do ở normalizeForMatch()).
-          if (/\s/.test(ch)) continue;
-          normalized += ch;
-          map.push({ node, offset: k });
-        }
-      }
-      const idx = normalized.indexOf(snippet);
-      if (idx === -1 || idx >= map.length) return;
-      // Trước đây tính endIdx bằng CỘNG ĐỘ DÀI (idx + fullNorm.length - 1),
-      // ngầm giả định chuỗi "normalized" dựng từ DOM dài đúng bằng fullNorm
-      // (chunkText đã chuẩn hoá khoảng trắng). Giả định này SAI khi chunk
-      // trải dài qua ranh giới 2 đoạn văn (2 thẻ <p> khác nhau): chunkText
-      // nối các câu bằng 1 dấu cách ẢO (sentences.join(' ')) dù 2 câu đó
-      // nằm ở 2 thẻ <p> riêng KHÔNG có khoảng trắng thật nào giữa chúng
-      // trong DOM — khiến fullNorm dài hơn "normalized" (DOM thật) đúng 1
-      // ký tự tại mỗi ranh giới đoạn văn bị băng qua, làm endIdx tính dư,
-      // highlight lấn thêm sang ký tự đầu của chunk kế tiếp.
-      // Sửa: dò trực tiếp ĐOẠN CUỐI của chunk (suffix) trong "normalized"
-      // tính từ idx trở đi, thay vì cộng độ dài — luôn khớp đúng vị trí
-      // thật trong DOM bất kể có bao nhiêu ranh giới đoạn văn/khoảng trắng
-      // lệch ở giữa. Giữ cách tính cũ làm phương án dự phòng nếu không dò
-      // được suffix (chunk quá ngắn hoặc có sai khác khác thường).
-      let endIdx = Math.min(idx + fullNorm.length - 1, map.length - 1);
-      const suffix = fullNorm.slice(-40);
-      if (suffix.length >= 6) {
-        const endMatch = normalized.indexOf(suffix, idx);
-        if (endMatch !== -1) {
-          endIdx = Math.min(endMatch + suffix.length - 1, map.length - 1);
-        }
-      }
-      // Bọc <mark> TRƯỚC khi tính rect để cuộn — dùng luôn element <mark>
-      // vừa render để định vị, đáng tin hơn hẳn so với tự tính rect trên 1
-      // Range ký tự đơn lẻ (trước đây làm theo cách này, đôi khi trình
-      // duyệt trả về rect rỗng ở 1 số vị trí ngắt dòng/khoảng trắng khiến
-      // không cuộn được dù highlight vẫn lên đúng chỗ).
-      if (state.markAudio) {
-        highlightChunkRange(map, idx, endIdx);
-      }
-      // Cuộn khi "Tự động cuộn" đang bật, HOẶC khi bị ép cuộn (bấm Đoạn
-      // trước/Đoạn sau).
-      if (state.scrollWithAudio || forceScroll) {
-        let rect = null;
-        const firstMark = chunkHighlightEls[0];
-        if (firstMark) {
-          rect = firstMark.getBoundingClientRect();
-        } else {
-          // "Nổi bật đoạn văn" đang tắt nên không có <mark> — quay lại cách
-          // cũ: tự dựng Range 1 ký tự tại điểm bắt đầu chunk để đo vị trí.
-          const { node: targetNode, offset } = map[idx];
-          const range = document.createRange();
-          range.setStart(targetNode, offset);
-          range.setEnd(targetNode, Math.min(offset + 1, targetNode.nodeValue.length));
-          rect = range.getBoundingClientRect();
-        }
-        if (rect && !(rect.top === 0 && rect.bottom === 0)) {
-          const areaRect = scrollArea.getBoundingClientRect();
-          // Cuộn sao cho đoạn đang đọc nằm khoảng 30% từ trên khung đọc
-          // xuống, thay vì dán sát mép trên — đỡ cảm giác giật khi cuộn
-          // liên tục.
-          const target = scrollArea.scrollTop + (rect.top - areaRect.top) - areaRect.height * 0.3;
-          scrollArea.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
-        }
-      }
-    } catch (_) { /* im lặng bỏ qua nếu không định vị được */ }
+
+  function formatTime(sec) {
+    if (!sec || isNaN(sec) || sec < 0) return '00:00';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
   }
 
-  // ─── Dual-Buffer Gapless Audio Engine with Pitch-Preservation ───────────────
-  let audioPlayers = [null, null];
-  let activeAudioIdx = 0;
-  let preloadedChunkIdx = -1;
-  let transitionMonitorTimer = null;
+  // ─── Single HTML5 Audio Engine for Full-Chapter Playback ──────────────────
+  let chapterAudio = null;
 
-  function createAudioPlayer() {
-    const a = new Audio();
-    a.preload = 'auto';
-    a.autoplay = false;
-    a.preservesPitch = true;
-    a.mozPreservesPitch = true;
-    a.webkitPreservesPitch = true;
-    return a;
-  }
-
-  function initAudioPlayers() {
-    if (!audioPlayers[0]) {
-      audioPlayers[0] = createAudioPlayer();
-      audioPlayers[1] = createAudioPlayer();
+  function getChapterAudio() {
+    if (!chapterAudio) {
+      chapterAudio = new Audio();
+      chapterAudio.preload = 'auto';
+      chapterAudio.preservesPitch = true;
+      chapterAudio.mozPreservesPitch = true;
+      chapterAudio.webkitPreservesPitch = true;
+      chapterAudio.ontimeupdate = onAudioTimeUpdate;
+      chapterAudio.onloadedmetadata = () => {
+        applySpeedToAudio(chapterAudio, state.speed);
+        updateTimeAndProgressUI();
+        updatePositionState();
+      };
+      chapterAudio.onended = onAudioEnded;
+      chapterAudio.onerror = (e) => {
+        console.warn('Chapter audio error:', e);
+        if (state.playing) {
+          stopReading('Lỗi phát âm thanh chương.');
+        }
+      };
     }
-    return audioPlayers;
-  }
-
-  function getActiveAudio() {
-    initAudioPlayers();
-    return audioPlayers[activeAudioIdx];
-  }
-
-  function getStandbyAudio() {
-    initAudioPlayers();
-    return audioPlayers[1 - activeAudioIdx];
+    return chapterAudio;
   }
 
   function applySpeedToAudio(a, mult) {
@@ -1998,24 +1704,16 @@
     } catch (_) {}
   }
 
-  function stopTransitionMonitor() {
-    if (transitionMonitorTimer) {
-      clearInterval(transitionMonitorTimer);
-      transitionMonitorTimer = null;
-    }
-  }
-
-  // Compatible getter for state.audioEl
+  // Getter compatibility
   Object.defineProperty(state, 'audioEl', {
-    get() {
-      return getActiveAudio();
-    },
+    get() { return getChapterAudio(); },
     set(val) {
-      if (val === null) {
-        stopTransitionMonitor();
-        if (audioPlayers[0]) silenceAudio(audioPlayers[0]);
-        if (audioPlayers[1]) silenceAudio(audioPlayers[1]);
-        preloadedChunkIdx = -1;
+      if (val === null && chapterAudio) {
+        try {
+          chapterAudio.pause();
+          chapterAudio.removeAttribute('src');
+          chapterAudio.load();
+        } catch (_) {}
       }
     },
     configurable: true,
@@ -2023,7 +1721,105 @@
   });
 
   function getAudioElement() {
-    return getActiveAudio();
+    return getChapterAudio();
+  }
+
+  function updateTimeAndProgressUI() {
+    if (!chapterAudio || !ui) return;
+    const cur = chapterAudio.currentTime || 0;
+    const dur = chapterAudio.duration || 0;
+    if (ui.timeDisplay) {
+      ui.timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+    }
+    if (ui.progressBar && dur > 0) {
+      const pct = Math.min(100, Math.max(0, (cur / dur) * 100));
+      ui.progressBar.style.width = pct.toFixed(1) + '%';
+    }
+  }
+
+  function onAudioTimeUpdate() {
+    if (!chapterAudio || !state.playing) return;
+    updateTimeAndProgressUI();
+    updatePositionState();
+
+    const cur = chapterAudio.currentTime || 0;
+    const dur = chapterAudio.duration || 0;
+    if (cur > 3 && Math.floor(cur) % 3 === 0) {
+      saveResumeTime(cur, dur);
+    }
+
+    if (state.autoNext && state.fullChapter && dur > 15 && cur >= dur * 0.75 && !state.nextChap) {
+      prepareNextChapter();
+    }
+  }
+
+  let isScrubbing = false;
+  function initSeekTrack(trackEl) {
+    if (!trackEl) return;
+
+    function seekToEvent(e) {
+      if (!chapterAudio || !chapterAudio.duration) return;
+      const rect = trackEl.getBoundingClientRect();
+      const clientX = (e.touches && e.touches.length > 0) ? e.touches[0].clientX : e.clientX;
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      chapterAudio.currentTime = ratio * chapterAudio.duration;
+      updateTimeAndProgressUI();
+      updatePositionState();
+    }
+
+    trackEl.addEventListener('click', (e) => {
+      seekToEvent(e);
+    });
+
+    trackEl.addEventListener('mousedown', (e) => {
+      isScrubbing = true;
+      seekToEvent(e);
+      const onMouseMove = (ev) => {
+        if (!isScrubbing) return;
+        seekToEvent(ev);
+      };
+      const onMouseUp = () => {
+        isScrubbing = false;
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    });
+
+    trackEl.addEventListener('touchstart', (e) => {
+      isScrubbing = true;
+      seekToEvent(e);
+    }, { passive: true });
+
+    trackEl.addEventListener('touchmove', (e) => {
+      if (!isScrubbing) return;
+      seekToEvent(e);
+    }, { passive: true });
+
+    trackEl.addEventListener('touchend', () => {
+      isScrubbing = false;
+    });
+  }
+
+  function seekAudioRelative(seconds) {
+    const audio = getChapterAudio();
+    if (!audio) return;
+    const cur = audio.currentTime || 0;
+    const dur = audio.duration || 0;
+    let target = cur + seconds;
+    if (target < 0) target = 0;
+    if (dur > 0 && target >= dur) {
+      if (state.autoNext) playNextChapter();
+      else {
+        audio.currentTime = dur;
+        onAudioEnded();
+      }
+      return;
+    }
+    audio.currentTime = target;
+    updateTimeAndProgressUI();
+    updatePositionState();
   }
 
   function playNextChapter() {
@@ -2031,7 +1827,7 @@
       const curChap = state.playingCur != null ? state.playingCur : S.cur;
       if (curChap < S.chapters.length - 1) {
         if (typeof nav === 'function') nav(curChap + 1);
-        setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 200);
+        setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 250);
       }
     }
   }
@@ -2041,38 +1837,13 @@
       const curChap = state.playingCur != null ? state.playingCur : S.cur;
       if (curChap > 0) {
         if (typeof nav === 'function') nav(curChap - 1);
-        setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 200);
+        setTimeout(() => { if (typeof onPlayClick === 'function') onPlayClick(); }, 250);
       }
-    }
-  }
-
-  function seekAudioRelative(seconds) {
-    const curAudio = getActiveAudio();
-    if (!curAudio) return;
-    const cur = curAudio.currentTime || 0;
-    const dur = curAudio.duration || 0;
-    let target = cur + seconds;
-    if (target < 0) {
-      if (state.idx > 0) {
-        playChunk(state.idx - 1, true);
-      } else {
-        curAudio.currentTime = 0;
-        updatePositionState();
-      }
-    } else if (dur > 0 && target >= dur) {
-      if (state.idx < state.chunks.length - 1) {
-        playChunk(state.idx + 1, true);
-      } else {
-        playNextChapter();
-      }
-    } else {
-      curAudio.currentTime = target;
-      updatePositionState();
     }
   }
 
   function updatePositionState() {
-    const curAudio = getActiveAudio();
+    const curAudio = getChapterAudio();
     if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && curAudio) {
       try {
         const dur = curAudio.duration;
@@ -2088,244 +1859,18 @@
     }
   }
 
-  async function playChunk(i, forceScroll) {
-    if (i < 0) return;
-    if (i >= state.chunks.length) {
-      if (state.autoNext && state.fullChapter) return finishChapterAutoNext();
-      if (state.fullChapter) clearResumePoint();
-      stopTransitionMonitor();
-      state.playing = false;
-      setUIState('idle');
-      setStatus(state.fullChapter ? 'Đã đọc xong chương.' : 'Đã đọc xong đoạn văn bản.');
-      syncBgmWithTts();
-      return;
-    }
-
-    state.idx = i;
-    const myToken = state.token;
-
-    // Fast path: Check if chunk i was ALREADY preloaded into standby player
-    let isPreloadedInStandby = (preloadedChunkIdx === i);
-
-    if (!isPreloadedInStandby) {
-      setUIState('loading');
-    }
-
-    const blob = await getChunkBlob(i);
-    if (myToken !== state.token) return;
-
-    if (blob === EMPTY_CHUNK) return playChunk(i + 1);
-    if (!blob) {
-      state.consecutiveFailures++;
-      if (state.consecutiveFailures >= MAX_CONSECUTIVE_SYNTH_FAILURES
-          || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
-        stopReading('Mất kết nối mạng (hoặc lỗi tổng hợp giọng đọc liên tục), đã dừng đọc.');
-        return;
-      }
-      setStatus('Lỗi tổng hợp giọng đọc, đang tự chuyển đoạn tiếp theo…');
-      return playChunk(i + 1);
-    }
-
-    state.consecutiveFailures = 0;
-    saveResumePoint();
-
-    initAudioPlayers();
-    stopTransitionMonitor();
-
-    // Check if chunk i was preloaded into standby player
-    isPreloadedInStandby = (preloadedChunkIdx === i);
-    preloadedChunkIdx = -1;
-
-    // Previous active audio
-    const prevAudio = getActiveAudio();
-
-    // Swap active player if preloaded in standby
-    if (isPreloadedInStandby) {
-      activeAudioIdx = 1 - activeAudioIdx;
-    }
-
-    const audio = getActiveAudio();
-
-    // Stop and silence the previous player completely so it can NEVER overlap or replay
-    if (prevAudio && prevAudio !== audio) {
-      try {
-        prevAudio.pause();
-        prevAudio.onended = null;
-        prevAudio.onerror = null;
-        if (prevAudio.src && prevAudio.src.startsWith('blob:')) {
-          URL.revokeObjectURL(prevAudio.src);
-        }
-        prevAudio.removeAttribute('src');
-        prevAudio.load();
-      } catch (_) {}
-    }
-
-    if (!isPreloadedInStandby) {
-      // Clear standby player if not preloaded to ensure no lingering audio
-      const standbyAudio = getStandbyAudio();
-      if (standbyAudio && standbyAudio !== audio) {
-        try {
-          standbyAudio.pause();
-          standbyAudio.onended = null;
-          standbyAudio.onerror = null;
-          if (standbyAudio.src && standbyAudio.src.startsWith('blob:')) {
-            URL.revokeObjectURL(standbyAudio.src);
-          }
-          standbyAudio.removeAttribute('src');
-          standbyAudio.load();
-        } catch (_) {}
-      }
-
-      if (audio.src && audio.src.startsWith('blob:')) {
-        try { URL.revokeObjectURL(audio.src); } catch (_) {}
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      audio.src = blobUrl;
-      audio.load();
-    }
-
-    audio.volume = state.volume;
-    applySpeedToAudio(audio, state.speed);
-
-    audio.onloadedmetadata = () => {
-      applySpeedToAudio(audio, state.speed);
-    };
-
-    let transitionDone = false;
-    const triggerNextChunk = () => {
-      if (transitionDone || myToken !== state.token) return;
-      transitionDone = true;
-      stopTransitionMonitor();
-      playChunk(i + 1);
-    };
-
-    audio.onended = triggerNextChunk;
-    audio.onerror = () => {
-      if (myToken === state.token && !transitionDone) {
-        transitionDone = true;
-        stopTransitionMonitor();
-        playChunk(i + 1);
-      }
-    };
-
-    // Call .play() IMMEDIATELY to avoid audio latency
-    const playPromise = audio.play();
-    if (playPromise && playPromise.catch) {
-      playPromise.then(() => {
-        if (myToken === state.token) {
-          applySpeedToAudio(audio, state.speed);
-        }
-      }).catch((err) => {
-        console.warn('Audio play error:', err);
-        if (myToken === state.token) {
-          if (err && err.name === 'NotAllowedError') {
-            state.playing = false;
-            setUIState('paused');
-            setStatus('Tạm dừng (Bấm nút Phát để tiếp tục nghe).');
-          } else {
-            triggerNextChunk();
-          }
-        }
+  function updateMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      const chapTitle = playingChapterLabel() || ((typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) ? S.chapters[S.cur].title : '');
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: chapTitle || document.title,
+        artist: 'TruyenDichAI',
+        album: chapTitle || 'Truyện Dịch AI',
       });
-    }
-
-    state.playing = true;
-    setUIState('playing');
-    syncBgmWithTts();
-
-    // High-precision transition monitor (runs every 20ms)
-    // Starts the next chunk smoothly right before file ends (~30ms) to ensure
-    // zero audio latency / gapless playback without voice overlap.
-    transitionMonitorTimer = setInterval(() => {
-      if (myToken !== state.token || !state.playing) {
-        stopTransitionMonitor();
-        return;
-      }
-      updatePositionState();
-      if (transitionDone) return;
-
-      const dur = audio.duration;
-      const cur = audio.currentTime;
-      if (dur > 0.3) {
-        if (cur >= dur - 0.03) {
-          transitionDone = true;
-          stopTransitionMonitor();
-          playChunk(i + 1);
-        }
-      }
-    }, 20);
-
-    // Preload next chunk into standby player
-    const nextIdx = i + 1;
-    if (nextIdx < state.chunks.length) {
-      getChunkBlob(nextIdx).then(nextBlob => {
-        if (myToken !== state.token || !nextBlob || nextBlob === EMPTY_CHUNK) return;
-        const targetStandby = getStandbyAudio();
-        if (targetStandby.src && targetStandby.src.startsWith('blob:')) {
-          try { URL.revokeObjectURL(targetStandby.src); } catch (_) {}
-        }
-        const standbyUrl = URL.createObjectURL(nextBlob);
-        targetStandby.src = standbyUrl;
-        targetStandby.volume = state.volume;
-        targetStandby.load();
-        preloadedChunkIdx = nextIdx;
-      }).catch(() => {});
-    }
-
-    if (state.autoNext && state.fullChapter && i === Math.max(0, state.chunks.length - 3)) {
-      prepareNextChapter();
-    }
-
-    // Defer DOM updates (highlight & scroll) to requestAnimationFrame so audio start is never blocked!
-    requestAnimationFrame(() => {
-      if (myToken !== state.token) return;
-      updateChunkUI();
-      scrollToChunk(i, forceScroll);
-
-      if ('mediaSession' in navigator) {
-        try {
-          const chapTitle = (typeof S !== 'undefined' && S.chapters && S.chapters[S.cur]) ? S.chapters[S.cur].title : '';
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: `Đoạn ${i + 1}/${state.chunks.length} - ${chapTitle || document.title}`,
-            artist: 'TruyenDichAI',
-            album: chapTitle || 'Truyện Dịch AI'
-          });
-        } catch (_) {}
-      }
-    });
-
-    prefetchWindow(i);
+    } catch (_) {}
   }
 
-  // Chuẩn bị trước chương kế tiếp: đợi bản dịch sẵn sàng, tách chunk và
-  // tổng hợp giọng đọc trước vài chunk đầu — nhưng KHÔNG gọi nav() ở đây,
-  // nghĩa là KHÔNG đổi giao diện/chương đang hiển thị. Việc chuyển hiển thị
-  // (nav) chỉ diễn ra trong finishChapterAutoNext(), tức là sau khi đã phát
-  // xong toàn bộ audio của chương hiện tại. Nhờ vậy prefetch vẫn chạy ngầm
-  // sớm như cũ, nhưng người nghe vẫn nghe trọn vẹn chương hiện tại trước
-  // khi app thực sự chuyển sang chương kế tiếp.
-  // ─── Đánh dấu rời khỏi / quay lại chương đang phát khi chuyển chương thủ
-  // công ────────────────────────────────────────────────────────────────
-  // Ghi lại "chương đang mong đợi" (S.cur + tham chiếu mảng S.chapters) mỗi
-  // khi CHÍNH tts.js là bên thực hiện việc chuyển chương (qua nav() trong
-  // finishChapterAutoNext). Nếu lúc kiểm tra định kỳ phát hiện S.cur hoặc
-  // S.chapters đã đổi khác so với lần ghi gần nhất mà KHÔNG phải do tts.js
-  // tự đổi, nghĩa là người dùng vừa tự tay bấm chương khác, hoặc mở/đổi
-  // sang truyện khác (S.chapters trỏ tới mảng mới) → KHÔNG dừng audio ngay,
-  // chỉ đánh dấu chapterDetached để chương đang đọc dở được đọc cho hết rồi
-  // tự dừng, không tự chuyển sang chương kế tiếp nữa dù "Tự động chuyển
-  // chương" vẫn bật (xem playChunk), đồng thời đổi nút Tạm dừng thành nút
-  // Dừng — đỏ (xem setUIState). Nếu sau đó người dùng quay lại ĐÚNG chương
-  // đang được audio đọc (so với playingCur/playingChaptersRef), bỏ trạng
-  // thái detached, trả nút Dừng về lại Tạm dừng như bình thường.
-  // Tạo "chữ ký" cho chương ở vị trí idx trong S.chapters — dùng thay cho so
-  // sánh tham chiếu object (S.chapters === ...) vì trang web có thể tự dựng
-  // lại mảng S.chapters (tham chiếu mới) mà nội dung không đổi, ví dụ chỉ do
-  // mở/đóng Cài đặt hoặc do quay lại đúng truyện cũ. Chữ ký gồm: vị trí,
-  // tổng số chương (đặc trưng cho truyện) và tiêu đề chương — CỐ Ý KHÔNG
-  // dùng độ dài/nội dung chương, vì bấm xem "bản gốc/bản dịch" có thể đổi
-  // nội dung hiển thị của chương đang đọc mà không phải là đổi chương thật,
-  // nếu tính cả nội dung vào chữ ký sẽ bị báo nhầm là "đổi chương".
   function chapterSignature(idx) {
     if (typeof S === 'undefined' || !S.chapters || !S.chapters[idx]) return null;
     const ch = S.chapters[idx];
@@ -2333,106 +1878,75 @@
     const title = ch.title || '';
     return idx + '::' + len + '::' + title;
   }
+
   function syncExpectedChapter() {
     if (typeof S === 'undefined') return;
     state.expectedCur = S.cur;
     state.expectedChaptersRef = S.chapters;
     state.expectedSig = chapterSignature(S.cur);
+    updateNavButtons();
   }
-  // Ghi lại chương THỰC SỰ đang được audio đọc — gọi khi bắt đầu phát 1
-  // chương (startReading, và sau nav() trong finishChapterAutoNext).
+
   function syncPlayingChapter() {
     if (typeof S === 'undefined') return;
     state.playingCur = S.cur;
     state.playingChaptersRef = S.chapters;
     state.playingSig = chapterSignature(S.cur);
+    updateNavButtons();
   }
 
-  // ─── Lưu vị trí đang nghe dở để "Nghe tiếp đoạn dang dở?" khi mở lại ────
-  // Chỉ lưu 1 vị trí MỚI NHẤT cho mỗi truyện (không lưu riêng theo từng
-  // chương), dùng key theo địa chỉ trang (origin + pathname, bỏ qua
-  // query/hash) — vì trang này là SPA, đổi chương chỉ đổi S.cur chứ không
-  // đổi URL, nên origin+pathname là đại diện ổn định cho "1 truyện".
-  // Vị trí lưu dưới dạng: chữ ký chương (chapterSignature, xem ở trên) +
-  // 1 đoạn trích đã chuẩn hoá khoảng trắng (snippet) của chunk đang đọc dở.
-  // Lúc mở lại, dò tìm đúng vị trí snippet đó trong nội dung chương hiện
-  // tại (kỹ thuật giống scrollToChunk() — so khớp bản đã chuẩn hoá khoảng
-  // trắng), rồi cắt lấy phần còn lại của chương để đọc tiếp, y như "Đọc từ
-  // đây" (readTextViaSelection).
   function resumeStorageKey() {
     return 'tts_resume::' + location.origin + location.pathname;
   }
-  function saveResumePoint() {
-    // Chỉ lưu khi đang đọc TOÀN BỘ chương (fullChapter) — không lưu khi chỉ
-    // đọc 1 đoạn bôi đen thủ công ("Đọc văn bản"), vì đó không phải phiên
-    // "nghe dở 1 chương" theo đúng nghĩa.
-    if (!state.fullChapter || state.idx < 0 || !state.chunks[state.idx] || !state.playingSig) return;
-    const snippet = normalizeForMatch(state.chunks[state.idx]).slice(0, 50);
-    if (snippet.length < 8) return; // đoạn quá ngắn, dò lại sau này không đủ chính xác
+
+  function saveResumeTime(cur, dur) {
+    if (!state.fullChapter || !state.playingSig || cur < 5) return;
+    if (dur && cur >= dur - 5) {
+      clearResumePoint();
+      return;
+    }
     try {
-      localStorage.setItem(resumeStorageKey(), JSON.stringify({ sig: state.playingSig, snippet }));
+      localStorage.setItem(resumeStorageKey(), JSON.stringify({
+        sig: state.playingSig,
+        time: Math.floor(cur),
+        duration: Math.floor(dur)
+      }));
     } catch (_) {}
   }
+
   function loadResumePoint() {
     try {
       const raw = localStorage.getItem(resumeStorageKey());
       return raw ? JSON.parse(raw) : null;
     } catch (_) { return null; }
   }
+
   function clearResumePoint() {
     try { localStorage.removeItem(resumeStorageKey()); } catch (_) {}
   }
-  // Trả về bản ghi đã lưu NẾU nó khớp đúng với chương đang hiển thị hiện tại
-  // (S.cur) — bắt buộc phải mở đúng chương dang dở mới coi là đọc tiếp được.
+
   function getResumeForCurrentChapter() {
     if (typeof S === 'undefined' || !S.chapters) return null;
     const saved = loadResumePoint();
     if (!saved || !saved.sig) return null;
     return saved.sig === chapterSignature(S.cur) ? saved : null;
   }
-  // Giống map trong scrollToChunk() (TreeWalker trên DOM) nhưng làm việc
-  // trực tiếp trên 1 chuỗi thuần — dùng khi mở lại trang, chỉ có sẵn text
-  // thô (getCurrentText()) chứ không có Range/DOM cũ. Trả về bản đã chuẩn
-  // hoá khoảng trắng (normalized) cùng map[chỉ số trong normalized] = chỉ
-  // số thật trong chuỗi gốc, để tìm xong snippet là suy ra được luôn vị trí
-  // cắt trong chuỗi gốc.
-  function buildNormalizedMap(str) {
-    // Đồng bộ quy tắc với normalizeForMatch() ở trên: bỏ hẳn khoảng trắng
-    // thay vì gộp về 1 dấu cách.
-    let normalized = '';
-    const map = [];
-    for (let k = 0; k < str.length; k++) {
-      const ch = str[k];
-      if (/\s/.test(ch)) continue;
-      normalized += ch;
-      map.push(k);
-    }
-    return { normalized, map };
-  }
-  // Bấm hàng "Nghe tiếp đoạn dang dở?" — dò lại vị trí đã lưu trong nội
-  // dung chương đang hiển thị rồi đọc tiếp từ đó tới hết chương.
+
   function resumeSavedPoint() {
     const saved = getResumeForCurrentChapter();
-    if (!saved) return;
+    if (!saved || !saved.time) return;
     const fullText = getCurrentText();
     if (!fullText) return;
-    const { normalized, map } = buildNormalizedMap(fullText);
-    const pos = normalized.indexOf(saved.snippet);
-    if (pos === -1 || pos >= map.length) { clearResumePoint(); return; }
-    const text = fullText.slice(map[pos]).trim();
-    if (!text) { clearResumePoint(); return; }
-    startReading(text, true);
+    startReading(fullText, true, saved.time);
   }
 
   function watchExternalChapterChange() {
     setInterval(() => {
       if (typeof S === 'undefined') return;
       updateResumeRow();
+      updateNavButtons();
       if (state.expectedCur === null) { syncExpectedChapter(); return; }
       const curSig = chapterSignature(S.cur);
-      // So sánh bằng chữ ký nội dung thay vì tham chiếu mảng/số thứ tự đơn
-      // thuần — tránh báo sai "đổi chương" khi trang chỉ re-render (mở/đóng
-      // Cài đặt) mà nội dung chương hiện tại không hề thay đổi.
       const sigChanged = curSig !== state.expectedSig;
       if (sigChanged) {
         if (state.uiState !== 'idle') {
@@ -2441,12 +1955,6 @@
           if (backToPlayingChapter) {
             state.chapterDetached = false;
             setUIState(state.uiState);
-            // Người dùng vừa quay đúng lại chương đang phát (bấm hàng "Đang
-            // phát...", hoặc tự bấm "Chương trước/sau"/mở lại từ danh sách
-            // chương) — DOM chương này giờ đã khớp với state.chunks, cuộn/
-            // nổi bật tới đúng đoạn đang đọc luôn (tự bỏ qua nếu cả 2 công
-            // tắc "Tự động cuộn"/"Nổi bật đoạn văn" đều tắt).
-            if (state.idx >= 0) scrollToChunk(state.idx);
           } else if (!state.chapterDetached) {
             state.chapterDetached = true;
             setUIState(state.uiState);
@@ -2458,135 +1966,218 @@
   }
   watchExternalChapterChange();
 
+  function playPreparedBlob(blob, myToken, resumeTime = 0) {
+    const audio = getChapterAudio();
+    if (audio.src && audio.src.startsWith('blob:')) {
+      URL.revokeObjectURL(audio.src);
+    }
+    audio.src = URL.createObjectURL(blob);
+    audio.volume = state.volume;
+    applySpeedToAudio(audio, state.speed);
+    audio.oncanplay = () => {
+      if (myToken !== state.token) return;
+      audio.oncanplay = null;
+      applySpeedToAudio(audio, state.speed);
+      if (resumeTime > 0 && resumeTime < (audio.duration || 99999)) {
+        audio.currentTime = resumeTime;
+      }
+      audio.play().then(() => {
+        if (myToken === state.token) {
+          applySpeedToAudio(audio, state.speed);
+          state.playing = true;
+          setUIState('playing');
+          syncBgmWithTts();
+          updateMediaSession();
+        }
+      }).catch((err) => {
+        console.warn('Play error:', err);
+        if (myToken === state.token) {
+          state.playing = false;
+          setUIState('paused');
+        }
+      });
+    };
+    audio.load();
+  }
+
+  async function startReading(text, fullChapter = true, forceResumeTime = 0) {
+    state.token++;
+    const myToken = state.token;
+
+    if (chapterAudio) {
+      try {
+        chapterAudio.pause();
+        chapterAudio.onended = null;
+        chapterAudio.onerror = null;
+        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(chapterAudio.src);
+        }
+        chapterAudio.removeAttribute('src');
+        chapterAudio.load();
+      } catch (_) {}
+    }
+
+    state.nextChap = null;
+    state.fullChapter = fullChapter;
+    state.chapterDetached = false;
+    syncPlayingChapter();
+
+    setUIState('loading');
+    setStatus('Đang tải âm thanh toàn bộ chương…');
+    if (ui.progressBar) ui.progressBar.style.width = '5%';
+    if (ui.timeDisplay) ui.timeDisplay.textContent = '00:00 / 00:00';
+
+    const blocks = splitChapterIntoBlocks(text, 700);
+    if (!blocks.length) {
+      stopReading('Không có nội dung để đọc.');
+      return;
+    }
+
+    const fullBlob = await synthesizeBlocksParallel(blocks, myToken, (done, total) => {
+      if (myToken !== state.token) return;
+      const pct = Math.round((done / total) * 100);
+      if (ui.progressBar) ui.progressBar.style.width = pct + '%';
+      setStatus(`Đang tải âm thanh: ${done}/${total} (${pct}%)`);
+    });
+
+    if (myToken !== state.token) return;
+    if (!fullBlob) {
+      stopReading('Lỗi tổng hợp giọng đọc cho chương này.');
+      return;
+    }
+
+    state.fullChapterBlob = fullBlob;
+    playPreparedBlob(fullBlob, myToken, forceResumeTime);
+  }
+
+  function startReadingBackground(text) {
+    state.token++;
+    const myToken = state.token;
+    if (chapterAudio) {
+      try {
+        chapterAudio.pause();
+        chapterAudio.onended = null;
+        chapterAudio.onerror = null;
+        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(chapterAudio.src);
+        }
+        chapterAudio.removeAttribute('src');
+        chapterAudio.load();
+      } catch (_) {}
+    }
+    state.nextChap = null;
+    state.fullChapter = true;
+    setUIState('loading');
+    setStatus('Đang tải âm thanh chương kế (nền)…');
+
+    const blocks = splitChapterIntoBlocks(text, 700);
+    if (!blocks.length) {
+      stopReading('Không có nội dung để đọc.');
+      return;
+    }
+
+    synthesizeBlocksParallel(blocks, myToken, null).then(fullBlob => {
+      if (myToken !== state.token) return;
+      if (!fullBlob) {
+        stopReading('Lỗi tổng hợp giọng đọc chương kế.');
+        return;
+      }
+      state.fullChapterBlob = fullBlob;
+      playPreparedBlob(fullBlob, myToken, 0);
+    }).catch(() => {
+      if (myToken === state.token) stopReading('Lỗi tải âm thanh.');
+    });
+  }
+
   function prepareNextChapter() {
     if (!state.autoNext || state.nextChap) return;
     if (typeof S === 'undefined' || typeof nav !== 'function') return;
-    // Dùng chương ĐANG PHÁT (playingCur) làm gốc thay vì S.cur (chương đang
-    // HIỂN THỊ) — hai cái có thể khác nhau khi người dùng đã tự chuyển sang
-    // xem chương khác trong lúc audio vẫn đọc nốt chương cũ (chapterDetached).
-    // Nếu vẫn dùng S.cur thì lúc detached sẽ tính nhầm "chương kế" là chương
-    // kế của chương đang HIỂN THỊ chứ không phải chương kế của chương đang
-    // phát, dẫn tới phát sai nội dung.
     const baseCur = state.playingCur != null ? state.playingCur : S.cur;
     if (baseCur < 0 || baseCur >= S.chapters.length - 1) return;
     const ni = baseCur + 1;
-    const prep = { chunks: [], cache: new Map(), ready: false, failed: false, ni };
+    const prep = { blob: null, ready: false, failed: false, ni };
     state.nextChap = prep;
     const myToken = state.token;
-    // Kích hoạt dịch trước chương kế tiếp mà KHÔNG đổi giao diện — tái dùng
-    // cơ chế preload sẵn có của app (giống hệt cách app tự preload các
-    // chương phía trước). Nếu chương đã được preload/dịch sẵn từ trước rồi
-    // thì gọi này gần như vô hại (có kiểm tra trùng lặp bên trong).
+
     if (typeof _startPreload === 'function') _startPreload(ni);
     const started = Date.now();
     const poll = setInterval(() => {
       if (myToken !== state.token || state.nextChap !== prep) { clearInterval(poll); return; }
       const ch = (typeof S !== 'undefined') ? S.chapters[ni] : null;
       if (!ch) { clearInterval(poll); prep.failed = true; return; }
-      // Có bản dịch rồi → dùng bản dịch. Nếu tắt tự động dịch (S.auto=false)
-      // thì không đợi dịch, đọc thẳng bản gốc (giống hành vi hiển thị mặc
-      // định của nav() khi không có bản dịch).
       const hasText = !!S.translations[ni] || !S.auto;
       if (hasText) {
         clearInterval(poll);
         const raw = S.translations[ni] || ch.content;
         const text = cleanCensorChars(applyReplace(stripTitle(raw, ch.title)));
-        const chunks = splitIntoChunks(text, chunkSizeForVoice(state.voice, state.speed));
-        if (!chunks.length) { prep.failed = true; return; }
-        prep.chunks = chunks;
-        // Tổng hợp trước vài chunk đầu của chương kế tiếp, lưu vào cache
-        // riêng (không đụng state.cache đang dùng cho chương hiện tại vì
-        // trùng chỉ số 0,1,2...).
-        for (let k = 0; k < Math.min(5, chunks.length); k++) {
-          const raceCount = k === 0 ? CHUNK0_RACE_SERVERS : 1;
-          // Giống getChunkBlob(): phải qua preprocessNumbersForTTS() + sanitizeText()
-          // trước khi tổng hợp, nếu không số/đơn vị/giờ sẽ bị đọc sai (đọc thẳng ký tự
-          // gốc) — không đụng tới prep.chunks[k] (text gốc, dùng để hiển thị
-          // UI khi chương kế trở thành chương đang đọc).
-          const speechText = sanitizeText(preprocessNumbersForTTS(chunks[k]));
-          // Giống getChunkBlob(): chunk rỗng sau khi dọn ký tự (VD: dòng "***"
-          // mở đầu chương) thì bỏ qua thẳng, không gọi TTS cho chuỗi rỗng.
-          if (!speechText.trim()) { prep.cache.set(k, Promise.resolve(EMPTY_CHUNK)); continue; }
-          const p = synthesize(speechText, state.voice, SYNTH_RATE, raceCount);
-          p.then(blob => { if (!blob) prep.cache.delete(k); });
-          prep.cache.set(k, p);
-        }
-        prep.ready = true;
-      } else if (Date.now() - started > 30000) {
+        const blocks = splitChapterIntoBlocks(text, 700);
+        if (!blocks.length) { prep.failed = true; return; }
+        synthesizeBlocksParallel(blocks, myToken, null).then((blob) => {
+          if (myToken !== state.token || state.nextChap !== prep) return;
+          if (blob) {
+            prep.blob = blob;
+            prep.ready = true;
+          } else {
+            prep.failed = true;
+          }
+        }).catch(() => {
+          prep.failed = true;
+        });
+      } else if (Date.now() - started > 35000) {
         clearInterval(poll);
         prep.failed = true;
       }
     }, 500);
   }
 
-  // Chương hiện tại đã đọc hết chunk cuối — chuyển sang chương kế tiếp.
-  // Nếu prepareNextChapter() đã kịp chuẩn bị sẵn (trường hợp thường gặp)
-  // thì phát ngay lập tức, không cần chờ. Nếu chưa kịp (vd chương chỉ có
-  // 1 chunk nên không có "chunk áp chót" để kích hoạt sớm), đợi tối đa cho
-  // tới khi chuẩn bị xong; nếu vẫn lỗi/hết giờ thì rơi về cách cũ (nav lại
-  // từ đầu) để đảm bảo không bao giờ bị kẹt.
   async function finishChapterAutoNext() {
     if (typeof S === 'undefined' || typeof nav !== 'function') {
-      stopReading('Đã đọc xong chương.'); return;
+      stopReading('Đã đọc xong chương.');
+      return;
     }
     const myToken = state.token;
-    // Chốt lại NGAY từ đầu chương đang phát (baseCur) và có đang "detached"
-    // hay không, trước khi vào các đoạn chờ (await) bên dưới — tránh trường
-    // hợp người dùng bấm qua lại chương trong lúc đang chờ khiến tính sai.
     const wasDetached = state.chapterDetached;
     const baseCur = state.playingCur != null ? state.playingCur : S.cur;
     setUIState('loading');
     setStatus(wasDetached ? 'Đang tự động đọc tiếp chương kế (không đổi trang)…' : 'Đang chuyển chương tiếp theo…');
+
     let prep = state.nextChap;
     if (!prep && baseCur < S.chapters.length - 1) {
       prepareNextChapter();
       prep = state.nextChap;
     }
+
     if (prep) {
       const started = Date.now();
       while (!prep.ready && !prep.failed) {
         if (myToken !== state.token) return;
-        if (Date.now() - started > 30000) { prep.failed = true; break; }
+        if (Date.now() - started > 35000) { prep.failed = true; break; }
         await new Promise(r => setTimeout(r, 200));
       }
       if (myToken !== state.token) return;
-      // Chỉ dùng prep nếu nó thực sự ứng với chương kế tiếp của chương vừa
-      // đọc xong (đề phòng người dùng tự tay chuyển chương trong lúc đang
-      // nghe, khiến baseCur đổi khác với lúc prepareNextChapter() được gọi).
-      if (prep.ready && baseCur + 1 === prep.ni) {
+
+      if (prep.ready && prep.blob && baseCur + 1 === prep.ni) {
         state.nextChap = null;
         if (!state.chapterDetached) {
-          // Bình thường (không detached): UI đang hiển thị đúng chương đang
-          // đọc → giờ mới thực sự chuyển hiển thị sang chương kế tiếp, vì
-          // chunk cuối của chương hiện tại đã phát xong.
           nav(prep.ni);
           syncExpectedChapter();
         }
-        // Luôn cập nhật "chương đang phát" dù có đổi hiển thị (nav) hay
-        // không — để lần autoNext tiếp theo (và watchExternalChapterChange,
-        // dùng để nhận biết lúc người dùng quay lại đúng chương đang phát)
-        // tính đúng dựa trên chương ĐANG PHÁT, không phải chương đang hiển
-        // thị.
         state.playingCur = prep.ni;
         state.playingChaptersRef = S.chapters;
         state.playingSig = chapterSignature(prep.ni);
-        state.chunks = prep.chunks;
-        state.cache = prep.cache;
-        state.idx = -1;
-        return playChunk(0);
+        playPreparedBlob(prep.blob, myToken, 0);
+        return;
       }
     }
+
     state.nextChap = null;
     if (baseCur >= S.chapters.length - 1) {
       clearResumePoint();
-      stopReading('Đã đọc xong toàn bộ truyện.'); return;
+      stopReading('Đã đọc xong toàn bộ truyện.');
+      return;
     }
+
     if (state.chapterDetached) {
-      // Đang detached mà chưa kịp chuẩn bị trước (prep) — trường hợp hiếm,
-      // ví dụ chương chỉ có 1-2 chunk nên không kịp kích hoạt prepareNextChapter
-      // sớm. Vẫn KHÔNG được gọi nav() vì người dùng đang xem chương khác;
-      // chỉ dịch/tổng hợp ngầm cho chương kế của chương ĐANG PHÁT rồi phát
-      // tiếp trong nền.
       const ni = baseCur + 1;
       if (typeof _startPreload === 'function') _startPreload(ni);
       const started2 = Date.now();
@@ -2603,15 +2194,14 @@
           state.playingChaptersRef = S.chapters;
           state.playingSig = chapterSignature(ni);
           startReadingBackground(text);
-        } else if (Date.now() - started2 > 30000) {
+        } else if (Date.now() - started2 > 35000) {
           clearInterval(poll);
           stopReading('Chương tiếp theo chưa dịch xong, dừng đọc.');
         }
       }, 500);
       return;
     }
-    // Fallback bình thường (không detached): nav lại từ đầu và đợi bản dịch
-    // như cách cũ.
+
     nav(baseCur + 1);
     syncExpectedChapter();
     const started2 = Date.now();
@@ -2620,80 +2210,55 @@
       const text = getCurrentText();
       if (text) {
         clearInterval(poll);
-        startReading(text);
-      } else if (Date.now() - started2 > 30000) {
+        startReading(text, true);
+      } else if (Date.now() - started2 > 35000) {
         clearInterval(poll);
         stopReading('Chương tiếp theo chưa dịch xong, dừng đọc.');
       }
     }, 500);
   }
 
-  function startReading(text, fullChapter = true) {
-    state.token++;
-    clearPrefetchQueue();
-    state.cache.clear();
-    stopTransitionMonitor();
-    if (audioPlayers[0]) silenceAudio(audioPlayers[0]);
-    if (audioPlayers[1]) silenceAudio(audioPlayers[1]);
-    preloadedChunkIdx = -1;
-    state.nextChap = null;
-    state.fullChapter = fullChapter;
-    state.chapterDetached = false;
-    state.consecutiveFailures = 0;
-    syncPlayingChapter();
-    state.chunks = splitIntoChunks(text, chunkSizeForVoice(state.voice, state.speed));
-    state.idx = -1;
-    // state.voice đã được đồng bộ sẵn qua dropdown chọn giọng đọc (selectVoice)
-    if (!state.chunks.length) { setUIState('idle'); setStatus('Không có nội dung để đọc.'); return; }
-    playChunk(0);
-  }
-
-  // Biến thể của startReading() dùng riêng cho trường hợp tự động next
-  // chương trong lúc đang "detached" (người dùng đã tự tay rời sang xem
-  // chương khác) — CHỦ Ý khác startReading() ở 2 điểm:
-  //  1. KHÔNG đặt state.chapterDetached = false — vẫn giữ trạng thái detached
-  //     vì UI vẫn đang hiển thị chương khác, không phải chương vừa bắt đầu
-  //     phát này.
-  //  2. KHÔNG gọi syncPlayingChapter() (hàm đó lấy theo S.cur — chương đang
-  //     HIỂN THỊ — sẽ sai). state.playingCur/playingSig phải được gọi nơi
-  //     đã set sẵn TRƯỚC khi gọi hàm này (xem finishChapterAutoNext), ứng
-  //     với chương thực sự bắt đầu phát ở đây.
-  function startReadingBackground(text) {
-    state.token++;
-    clearPrefetchQueue();
-    state.cache.clear();
-    stopTransitionMonitor();
-    if (audioPlayers[0]) silenceAudio(audioPlayers[0]);
-    if (audioPlayers[1]) silenceAudio(audioPlayers[1]);
-    preloadedChunkIdx = -1;
-    state.nextChap = null;
-    state.fullChapter = true;
-    state.consecutiveFailures = 0;
-    state.chunks = splitIntoChunks(text, chunkSizeForVoice(state.voice, state.speed));
-    state.idx = -1;
-    if (!state.chunks.length) { setUIState('idle'); setStatus('Không có nội dung để đọc.'); return; }
-    playChunk(0);
+  async function onAudioEnded() {
+    if (!state.fullChapter) {
+      stopReading('Đã đọc xong văn bản.');
+      return;
+    }
+    clearResumePoint();
+    if (state.autoNext) {
+      await finishChapterAutoNext();
+    } else {
+      state.playing = false;
+      setUIState('idle');
+      setStatus('Đã đọc xong chương.');
+      syncBgmWithTts();
+    }
   }
 
   function stopReading(msg) {
     state.token++;
-    clearPrefetchQueue();
-    stopTransitionMonitor();
-    if (audioPlayers[0]) silenceAudio(audioPlayers[0]);
-    if (audioPlayers[1]) silenceAudio(audioPlayers[1]);
-    preloadedChunkIdx = -1;
+    if (chapterAudio) {
+      try {
+        chapterAudio.pause();
+        chapterAudio.onended = null;
+        chapterAudio.onerror = null;
+        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(chapterAudio.src);
+        }
+        chapterAudio.removeAttribute('src');
+        chapterAudio.load();
+      } catch (_) {}
+    }
     state.fullChapterBlob = null;
-    state.isFullChapterPlaying = false;
-    state.fullChapterAudioReady = false;
-    state.playing = false; state.idx = -1; state.chunks = []; state.cache.clear();
+    state.playing = false;
     state.nextChap = null;
     state.chapterDetached = false;
-    state.consecutiveFailures = 0;
-    state.playingCur = null; state.playingChaptersRef = null;
-    clearChunkHighlight();
+    state.playingCur = null;
+    state.playingChaptersRef = null;
     syncBgmWithTts();
     if (ui) {
       setUIState('idle');
+      if (ui.timeDisplay) ui.timeDisplay.textContent = '00:00 / 00:00';
+      if (ui.progressBar) ui.progressBar.style.width = '0%';
       if (msg !== '' && msg !== undefined) setStatus(msg);
     }
   }
@@ -2701,35 +2266,25 @@
   function onPlayClick() {
     const text = getCurrentText();
     if (!text) { setStatus('Chưa có nội dung để đọc.'); return; }
-    // Mẹo bôi đen văn bản — chỉ hiện lần đầu nhấn nút Phát (hàm định nghĩa trong index.html).
     if (typeof window.showPlayTipOnce === 'function') window.showPlayTipOnce();
-    startReading(text);
+    startReading(text, true);
   }
 
   function onPauseClick() {
     if (state.playing) {
-      stopTransitionMonitor();
-      if (audioPlayers[0]) audioPlayers[0].pause();
-      if (audioPlayers[1]) audioPlayers[1].pause();
+      if (chapterAudio) chapterAudio.pause();
       state.playing = false;
       setUIState('paused');
       syncBgmWithTts();
-    } else if (state.idx >= 0) {
-      const cur = getActiveAudio();
-      if (cur) {
-        applySpeedToAudio(cur, state.speed);
-        cur.play().catch(() => {});
-      }
+    } else if (chapterAudio && chapterAudio.src) {
+      applySpeedToAudio(chapterAudio, state.speed);
+      chapterAudio.play().catch(() => {});
       state.playing = true;
       setUIState('playing');
       syncBgmWithTts();
     }
   }
 
-  // Nút play/pause giờ gộp làm một: chưa đọc gì (idle) → bắt đầu đọc;
-  // đang đọc/tạm dừng → chuyển qua onPauseClick để toggle như cũ. Riêng khi
-  // đã rời khỏi chương đang phát (chapterDetached) và nút đang hiện Dừng
-  // (đỏ) — xem setUIState — thì bấm vào là dừng hẳn luôn, không tạm dừng.
   function onPlayPauseClick() {
     if (state.uiState === 'idle') onPlayClick();
     else if (state.chapterDetached && (state.uiState === 'loading' || state.uiState === 'playing')) {
@@ -2802,18 +2357,10 @@
       navigator.mediaSession.setActionHandler('play', () => { mediaForcePlay(); });
       navigator.mediaSession.setActionHandler('pause', () => { mediaForcePause(); });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
-        if (state.idx > 0) {
-          playChunk(state.idx - 1, true);
-        } else {
-          playPrevChapter();
-        }
+        playPrevChapter();
       });
       navigator.mediaSession.setActionHandler('nexttrack', () => {
-        if (state.idx < state.chunks.length - 1) {
-          playChunk(state.idx + 1, true);
-        } else {
-          playNextChapter();
-        }
+        playNextChapter();
       });
       navigator.mediaSession.setActionHandler('seekforward', (details) => {
         const offset = (details && details.seekOffset) || 10;
@@ -2824,8 +2371,9 @@
         seekAudioRelative(-offset);
       });
       navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (details && details.seekTime != null && state.audioEl) {
-          state.audioEl.currentTime = details.seekTime;
+        if (details && details.seekTime != null && chapterAudio) {
+          chapterAudio.currentTime = details.seekTime;
+          updateTimeAndProgressUI();
           updatePositionState();
         }
       });
