@@ -1,7 +1,7 @@
 {
-  "name": "truyendichai - Dịch Truyện AI",
-  "short_name": "truyendichai",
-  "description": "Dịch truyện từ TXT/EPUB bằng AI, nghe audio kể chuyện, tự động chuyển chương.",
+  "name": "TruyenDichAI - Dịch Truyện AI",
+  "short_name": "TruyenDichAI",
+  "description": "TruyenDichAI - Dịch truyện từ TXT/EPUB bằng AI, nghe audio kể chuyện, tự động chuyển chương.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
