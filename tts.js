@@ -1019,13 +1019,24 @@
     return blocks;
   }
 
-  async function synthesizeBlocksParallel(blocks, myToken, onProgress) {
+  async function synthesizeBlocksParallel(blocks, myToken, onProgress, onInitialReady) {
     const n = blocks.length;
     const blobs = new Array(n).fill(null);
     let completed = 0;
     const isTikTok = VOICE_ENGINE.get(state.voice) === 'tiktok';
     const concurrency = isTikTok ? 1 : Math.min(8, n);
     let queueIdx = 0;
+    let initialFired = false;
+
+    function checkInitialReady() {
+      if (initialFired || typeof onInitialReady !== 'function') return;
+      if (blobs[0]) {
+        initialFired = true;
+        try {
+          onInitialReady(blobs[0], 1, n);
+        } catch (_) {}
+      }
+    }
 
     async function worker() {
       while (queueIdx < n) {
@@ -1037,6 +1048,7 @@
           blobs[i] = new Blob([], { type: 'audio/mpeg' });
           completed++;
           if (onProgress) onProgress(completed, n);
+          checkInitialReady();
           continue;
         }
 
@@ -1046,6 +1058,7 @@
         blobs[i] = blob;
         completed++;
         if (onProgress) onProgress(completed, n);
+        checkInitialReady();
       }
     }
 
@@ -1725,31 +1738,67 @@
     return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
   }
 
-  // ─── Single HTML5 Audio Engine for Full-Chapter Playback ──────────────────
+  // ─── Dual-Player Gapless Audio Engine ──────────────────
+  const audioPlayers = [null, null];
+  let activePlayerIdx = 0;
   let chapterAudio = null;
 
-  function getChapterAudio() {
-    if (!chapterAudio) {
-      chapterAudio = new Audio();
-      chapterAudio.preload = 'auto';
-      chapterAudio.preservesPitch = true;
-      chapterAudio.mozPreservesPitch = true;
-      chapterAudio.webkitPreservesPitch = true;
-      chapterAudio.ontimeupdate = onAudioTimeUpdate;
-      chapterAudio.onloadedmetadata = () => {
-        applySpeedToAudio(chapterAudio, state.speed);
-        updateTimeAndProgressUI();
-        updatePositionState();
+  function getAudioPlayer(idx) {
+    if (!audioPlayers[idx]) {
+      const a = new Audio();
+      a.preload = 'auto';
+      a.preservesPitch = true;
+      a.mozPreservesPitch = true;
+      a.webkitPreservesPitch = true;
+      a.ontimeupdate = () => {
+        if (a === getChapterAudio()) onAudioTimeUpdate();
       };
-      chapterAudio.onended = onAudioEnded;
-      chapterAudio.onerror = (e) => {
-        console.warn('Chapter audio error:', e);
-        if (state.playing) {
+      a.onloadedmetadata = () => {
+        applySpeedToAudio(a, state.speed);
+        if (a === getChapterAudio()) {
+          updateTimeAndProgressUI();
+          updatePositionState();
+        }
+      };
+      a.onended = () => {
+        if (a === getChapterAudio()) onAudioEnded();
+      };
+      a.onerror = (e) => {
+        console.warn('Audio player ' + idx + ' error:', e);
+        if (state.playing && a === getChapterAudio()) {
           stopReading('Lỗi phát âm thanh chương.');
         }
       };
+      audioPlayers[idx] = a;
     }
-    return chapterAudio;
+    chapterAudio = audioPlayers[activePlayerIdx];
+    return audioPlayers[idx];
+  }
+
+  function getChapterAudio() {
+    const a = getAudioPlayer(activePlayerIdx);
+    chapterAudio = a;
+    return a;
+  }
+
+  function cleanAudioPlayers() {
+    [0, 1].forEach(i => {
+      const p = audioPlayers[i];
+      if (p) {
+        try {
+          p.pause();
+          p.onended = null;
+          p.onerror = null;
+          if (p.src && p.src.startsWith('blob:')) {
+            URL.revokeObjectURL(p.src);
+          }
+          p.removeAttribute('src');
+          p.load();
+        } catch (_) {}
+      }
+    });
+    activePlayerIdx = 0;
+    chapterAudio = null;
   }
 
   function applySpeedToAudio(a, mult) {
@@ -2066,20 +2115,70 @@
     doPlay();
   }
 
+  function performGaplessUpgrade(fullBlob, myToken) {
+    if (myToken !== state.token || !state.playing) {
+      state.fullChapterBlob = fullBlob;
+      state.allBlocksReady = true;
+      return;
+    }
+    const curPlayer = getChapterAudio();
+    const curTime = curPlayer ? (curPlayer.currentTime || 0) : 0;
+    const wasPaused = curPlayer ? curPlayer.paused : false;
+    const nextIdx = 1 - activePlayerIdx;
+    const nextPlayer = getAudioPlayer(nextIdx);
+
+    const oldNextSrc = nextPlayer.src;
+    nextPlayer.src = URL.createObjectURL(fullBlob);
+    if (oldNextSrc && oldNextSrc.startsWith('blob:')) {
+      try { URL.revokeObjectURL(oldNextSrc); } catch (_) {}
+    }
+    applySpeedToAudio(nextPlayer, state.speed);
+    if (curTime > 0) {
+      try { nextPlayer.currentTime = curTime; } catch (_) {}
+    }
+    nextPlayer.volume = wasPaused ? state.volume : 0;
+
+    if (wasPaused) {
+      activePlayerIdx = nextIdx;
+      updateTimeAndProgressUI();
+      updatePositionState();
+      state.fullChapterBlob = fullBlob;
+      state.allBlocksReady = true;
+      showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+      setTimeout(hideLoadingBanner, 1000);
+      return;
+    }
+
+    const p = nextPlayer.play();
+    if (p !== undefined) {
+      p.then(() => {
+        if (myToken !== state.token) return;
+        nextPlayer.volume = state.volume;
+        curPlayer.pause();
+        const oldCurSrc = curPlayer.src;
+        curPlayer.removeAttribute('src');
+        if (oldCurSrc && oldCurSrc.startsWith('blob:')) {
+          try { URL.revokeObjectURL(oldCurSrc); } catch (_) {}
+        }
+        activePlayerIdx = nextIdx;
+        updateTimeAndProgressUI();
+        updatePositionState();
+        state.fullChapterBlob = fullBlob;
+        state.allBlocksReady = true;
+        showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+        setTimeout(hideLoadingBanner, 1000);
+      }).catch(() => {
+        state.fullChapterBlob = fullBlob;
+        state.allBlocksReady = true;
+      });
+    }
+  }
+
   async function startReading(text, fullChapter = true, forceResumeTime = 0) {
     state.token++;
     const myToken = state.token;
 
-    if (chapterAudio) {
-      try {
-        chapterAudio.pause();
-        chapterAudio.onended = null;
-        chapterAudio.onerror = null;
-        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
-          URL.revokeObjectURL(chapterAudio.src);
-        }
-      } catch (_) {}
-    }
+    cleanAudioPlayers();
 
     state.nextChap = null;
     state.fullChapter = fullChapter;
@@ -2102,14 +2201,25 @@
       return;
     }
 
+    let playbackStarted = false;
+    const onInitialReady = (initialBlob, readyCount, totalCount) => {
+      if (myToken !== state.token || playbackStarted) return;
+      playbackStarted = true;
+      playPreparedBlob(initialBlob, myToken, forceResumeTime);
+      const pct = Math.round((readyCount / totalCount) * 100);
+      showLoadingBanner(`Đang phát âm thanh • Nạp ngầm các phần sau (${readyCount}/${totalCount} đoạn)...`, pct);
+    };
+
     const fullBlob = await synthesizeBlocksParallel(blocks, myToken, (done, total) => {
       if (myToken !== state.token) return;
       const pct = Math.round((done / total) * 100);
       if (ui.progressBar) ui.progressBar.style.width = pct + '%';
-      const msg = `Đang tải âm thanh: ${done}/${total} đoạn (${pct}%)...`;
-      showLoadingBanner(msg, pct);
-      setStatus(msg);
-    });
+      if (playbackStarted) {
+        showLoadingBanner(`Đang phát âm thanh • Nạp ngầm các phần sau (${done}/${total} đoạn • ${pct}%)...`, pct);
+      } else {
+        showLoadingBanner(`Đang kết nối & nạp âm thanh (${done}/${total} đoạn • ${pct}%)...`, pct);
+      }
+    }, onInitialReady);
 
     if (myToken !== state.token) {
       hideLoadingBanner();
@@ -2125,9 +2235,13 @@
     state.isBuffering = false;
     state.fullChapterBlob = fullBlob;
 
-    playPreparedBlob(fullBlob, myToken, forceResumeTime);
-    showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
-    setTimeout(hideLoadingBanner, 1000);
+    if (playbackStarted) {
+      performGaplessUpgrade(fullBlob, myToken);
+    } else {
+      playPreparedBlob(fullBlob, myToken, forceResumeTime);
+      showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
+      setTimeout(hideLoadingBanner, 1000);
+    }
   }
 
   function startReadingBackground(text) {
@@ -2224,16 +2338,7 @@
     state.token++;
     const myToken = state.token;
 
-    if (chapterAudio) {
-      try {
-        chapterAudio.pause();
-        chapterAudio.onended = null;
-        chapterAudio.onerror = null;
-        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
-          URL.revokeObjectURL(chapterAudio.src);
-        }
-      } catch (_) {}
-    }
+    cleanAudioPlayers();
 
     state.allBlocksReady = false;
     state.isBuffering = false;
@@ -2349,18 +2454,7 @@
     state.token++;
     state.allBlocksReady = false;
     state.isBuffering = false;
-    if (chapterAudio) {
-      try {
-        chapterAudio.pause();
-        chapterAudio.onended = null;
-        chapterAudio.onerror = null;
-        if (chapterAudio.src && chapterAudio.src.startsWith('blob:')) {
-          URL.revokeObjectURL(chapterAudio.src);
-        }
-        chapterAudio.removeAttribute('src');
-        chapterAudio.load();
-      } catch (_) {}
-    }
+    cleanAudioPlayers();
     state.fullChapterBlob = null;
     state.playing = false;
     state.nextChap = null;
@@ -2380,14 +2474,14 @@
   const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
   function primeAudioPlayback() {
     try {
-      const a = getChapterAudio();
-      if (!state.playing) {
+      [0, 1].forEach(i => {
+        const a = getAudioPlayer(i);
         if (!a.src || a.src === '' || a.src.startsWith('data:audio/wav')) {
           a.src = SILENT_WAV;
         }
         const p = a.play();
         if (p !== undefined) p.catch(() => {});
-      }
+      });
     } catch (_) {}
   }
 
