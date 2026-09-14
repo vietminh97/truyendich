@@ -6285,16 +6285,25 @@
     // cộng thêm chút buffer để chắc chắn animation đã chạy xong hẳn trước khi
     // mở panel mới.
     function panelCloseMs() { return window.innerWidth <= 680 ? 230 : 340; }
+    function scrollToActiveTocItem(smooth = false) {
+      if (S.cur < 0) return;
+      const list = _chListEl || (_chListEl = document.getElementById('chList'));
+      if (!list || !list.children || !list.children[S.cur]) return;
+      const el = list.children[S.cur];
+      try {
+        el.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
+      } catch (e) {
+        try { el.scrollIntoView(false); } catch (e2) {}
+      }
+    }
     function openTocPanel() {
       showToc = true;
       document.getElementById('tocPanel').style.display = 'flex';
       updLeft();
-      // Chỉ tự động cuộn tới chương hiện tại trên desktop — trên mobile bỏ hẳn vì
-      // animation mở drawer (overlay + box-shadow) đã đủ nặng, cuộn thêm dễ gây giật.
-      if (S.cur >= 0 && window.innerWidth > 680) {
+      if (S.cur >= 0) {
+        scrollToActiveTocItem(false);
         setTimeout(() => {
-          const list = _chListEl || (_chListEl = document.getElementById('chList'));
-          if (list && list.children[S.cur]) list.children[S.cur].scrollIntoView({ block: 'center', behavior: 'smooth' });
+          scrollToActiveTocItem(false);
         }, 50);
       }
     }
@@ -7273,6 +7282,9 @@
         html += `<div class="${chCls(i)}" title="${escHtml(dt)}" data-idx="${i}"><span class="sdot"></span><span class="ch-name">${esc(dt)}</span></div>`;
       }
       list.innerHTML = html;
+      if (showToc && S.cur >= 0) {
+        setTimeout(() => scrollToActiveTocItem(false), 50);
+      }
     }
     // Delegation: gắn listener 1 lần duy nhất (khi module này chạy) thay vì mỗi lần renderList().
     (function initChListDelegation() {

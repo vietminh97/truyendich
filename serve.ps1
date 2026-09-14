@@ -13,7 +13,7 @@ Write-Host "=========================================="
 # Tự động mở trình duyệt web
 Start-Process $prefix
 
-$root = "d:\dich truyen"
+$root = $PSScriptRoot
 
 $mimeTypes = @{
     ".html" = "text/html; charset=utf-8"
