@@ -793,17 +793,20 @@ async function xlate(i,isPre=false){
     // (b) tự động bỏ cuộc sau ~10 phút lỗi liên tục dù đã thử hết key/model.
     S.failed[i]=true;
     if(giveUp){
-      // Đánh dấu riêng: chương này KHÔNG được tự động dịch lại khi người dùng
-      // đọc tới (nav()) — chỉ dịch lại khi họ chủ động bấm Dịch/Dịch lại.
       if(!S.autoFailed)S.autoFailed={};
       S.autoFailed[i]=true;
-      setStatus(`⚠️ Ch.${chNum(i)}: lỗi liên tục dù đã thử hết key/model (quá ${CHAPTER_TIMEOUT_MS/1000}s) — tạm bỏ qua, tiếp tục dịch các chương khác. Bấm 'Dịch' để thử lại chương này.`);
-      // Báo popup ngay cả khi đây là 1 chương preload ở phía trước (chưa đọc tới),
-      // miễn là nó là chương lỗi GẦN NHẤT tính từ chương đang đọc trở đi — xem
-      // checkNearestFailedPreload(). Nếu đang có 1 popup lỗi khác gần hơn đang hiện,
-      // hàm này sẽ không đè lên; chương này sẽ tự được báo sau khi chương gần hơn
-      // được đóng/dịch xong/hoặc bị vượt qua.
-      checkNearestFailedPreload();
+      if(S.autoRetryFailed !== false){
+        flowLog(2,`⚠️ Ch.${chNum(i)}: gặp lỗi liên tục — sẽ tự động lên lịch thử lại ngầm sau 20s (không hiện popup).`);
+        setTimeout(()=>{
+          delete S.failed[i];
+          if(S.autoFailed)delete S.autoFailed[i];
+          updChItem(i);
+          ensurePreload();
+        }, 20000);
+      } else {
+        setStatus(`⚠️ Ch.${chNum(i)}: lỗi liên tục dù đã thử hết key/model — tạm bỏ qua.`);
+        checkNearestFailedPreload();
+      }
     } else {
       setStatus(`⏹️ Đã dừng dịch ch.${chNum(i)}: ${lastErr.slice(0,120)}`);
     }

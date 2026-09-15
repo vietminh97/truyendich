@@ -4470,6 +4470,14 @@
                     </select>
                   </div>
                 </div>
+                <div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
+                  <input type="checkbox" id="bgTranslateCheck" onchange="toggleBgTranslateMode(this.checked)" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent);">
+                  <label for="bgTranslateCheck" style="cursor:pointer;font-weight:600;font-size:13px;color:var(--text);">Dịch ngầm liên tục khi rảnh / treo tab (Không giới hạn)</label>
+                </div>
+                <div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
+                  <input type="checkbox" id="autoRetryFailedCheck" onchange="toggleAutoRetryFailed(this.checked)" checked style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent);">
+                  <label for="autoRetryFailedCheck" style="cursor:pointer;font-weight:600;font-size:13px;color:var(--text);">Tự động thử lại khi chương bị lỗi (Không hiện popup hỏi)</label>
+                </div>
                 <!-- Hàng 3: như cũ -->
                 <div class="fg-row" id="patGroup">
                   <label style="display:inline-flex;align-items:center;">Pattern tiêu đề
@@ -4799,6 +4807,7 @@
             </svg> Đọc tiếp</button>
           <div class="tb-status" id="tbStatus"></div>
           <div class="tb-right">
+            <button class="btn" id="btnBgTranslate" title="Dịch ngầm liên tục khi rảnh hoặc treo tab" onclick="toggleBgTranslateMode()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Dịch ngầm</button>
             <button class="btn" id="btnCharMemOpen" disabled title="Quan hệ nhân vật"
               onclick="toggleCharMemDrawer()"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"
                 xmlns="http://www.w3.org/2000/svg">
@@ -4898,7 +4907,7 @@
   <script src="edit-text.js"></script>
   <script>
     // ===== STATE =====
-    const S = { chapters: [], translations: {}, translatedTitles: {}, cur: -1, xlatingSet: new Set(), stopReq: false, autoHalted: false, keyIdx: 0, preloading: new Set(), preloadAnnounced: new Set(), auto: true, fname: '', raw: '', everStarted: false, showOrig: false, failed: {}, dismissedAutoFailedPreload: new Set(), gen: 0, chapterCharSnapshot: {}, audited: {} };
+    const S = { chapters: [], translations: {}, translatedTitles: {}, cur: -1, xlatingSet: new Set(), stopReq: false, autoHalted: false, keyIdx: 0, preloading: new Set(), preloadAnnounced: new Set(), auto: true, fname: '', raw: '', everStarted: false, showOrig: false, failed: {}, dismissedAutoFailedPreload: new Set(), gen: 0, chapterCharSnapshot: {}, audited: {}, bgTranslateMode: false, autoRetryFailed: true };
     // S.xlatingSet: TẬP HỢP chỉ số các chương ĐANG được dịch tại thời điểm hiện tại (có thể nhiều
     // chương cùng lúc — xem "Số chương dịch song song" trong Cài đặt), thay cho 1 cờ boolean
     // isXlating dùng chung trước đây (không phân biệt được chương nào đang dịch khi chạy song song).
@@ -5641,11 +5650,23 @@
         checkNearestFailedPreload();
       }
     }
+    function toggleAutoRetryFailed(forceState) {
+      S.autoRetryFailed = (typeof forceState === 'boolean') ? forceState : !S.autoRetryFailed;
+      const chk = document.getElementById('autoRetryFailedCheck');
+      if (chk) chk.checked = !!S.autoRetryFailed;
+      if (S.autoRetryFailed && _failedPopupChIdx !== null) {
+        closePopup();
+      }
+    }
+
     // Tìm và hiện popup cho chương lỗi (autoFailed) GẦN NHẤT tính từ chương đang đọc
     // (S.cur) trở đi, bỏ qua các chương đã bị người dùng chủ động đóng popup trước đó.
-    // Tự đóng popup đang hiện nếu nó không còn hợp lệ nữa (đã hết lỗi, hoặc không còn
-    // là chương gần nhất — VD người đọc đã vượt qua chương đó).
+    // Nếu S.autoRetryFailed bật, tự động bỏ qua popup để dịch lại ngầm.
     function checkNearestFailedPreload() {
+      if (S.autoRetryFailed !== false) {
+        if (_failedPopupChIdx !== null) closePopup();
+        return;
+      }
       const candidates = (S.autoFailed ? Object.keys(S.autoFailed) : [])
         .map(Number)
         .filter(j => S.autoFailed[j] && j >= S.cur && !(S.dismissedAutoFailedPreload && S.dismissedAutoFailedPreload.has(j)))
@@ -7559,12 +7580,83 @@
     document.getElementById('readingArea').addEventListener('scroll', closeTbMoreMenu, true);
 
     // ===== TRANSLATE =====
-    function doStop() { S.stopReq = true; S.xlatingSet.clear(); S.autoHalted = true; setStatus('Đã dừng.'); updCtrl(); renderCh(S.cur); renderList(); }
+    function doStop() {
+      S.stopReq = true;
+      S.xlatingSet.clear();
+      S.autoHalted = true;
+      if (S.bgTranslateMode) {
+        toggleBgTranslateMode(false);
+      }
+      setStatus('Đã dừng.');
+      updCtrl();
+      renderCh(S.cur);
+      renderList();
+    }
 
-    // "all" (Tất cả chương chưa đọc) → trả về Infinity: mọi nơi dùng pc đều tự giới hạn lại bằng
+    // ===== DỊCH NGẦM LIÊN TỤC (WEB LOCK & IDLE BACKGROUND TRANSLATOR) =====
+    let _bgLockRelease = null;
+    function updateBgLockState() {
+      if (S.bgTranslateMode) {
+        if ('locks' in navigator && !_bgLockRelease) {
+          try {
+            navigator.locks.request('truyendich_bg_translate', () => {
+              return new Promise(resolve => {
+                _bgLockRelease = resolve;
+              });
+            }).catch(e => console.warn('[BgLock] Error:', e));
+          } catch (e) {}
+        }
+      } else {
+        if (_bgLockRelease) {
+          try { _bgLockRelease(); } catch (e) {}
+          _bgLockRelease = null;
+        }
+      }
+    }
+
+    function updateBgTranslateBtnUI() {
+      const btn = document.getElementById('btnBgTranslate');
+      const chk = document.getElementById('bgTranslateCheck');
+      if (btn) btn.classList.toggle('btn-on', !!S.bgTranslateMode);
+      if (chk) chk.checked = !!S.bgTranslateMode;
+    }
+
+    function toggleBgTranslateMode(forceState) {
+      const newState = (typeof forceState === 'boolean') ? forceState : !S.bgTranslateMode;
+      S.bgTranslateMode = newState;
+      updateBgTranslateBtnUI();
+      updateBgLockState();
+      if (S.bgTranslateMode) {
+        S.autoHalted = false;
+        S.stopReq = false;
+        flowLog(2, 'Kích hoạt Dịch Ngầm Liên Tục — nới rộng cửa sổ dịch sang tất cả các chương chưa dịch còn lại.');
+        ensurePreload();
+      } else {
+        flowLog(2, 'Tắt Dịch Ngầm Liên Tục — trở về giới hạn Số chương dịch trước.');
+      }
+    }
+
+    // Tự động kích hoạt dịch ngầm khi người dùng rảnh (không thao tác 30s)
+    let _idleTimer = null;
+    function resetIdleTimer() {
+      clearTimeout(_idleTimer);
+      if (S.cur < 0 || !S.auto) return;
+      _idleTimer = setTimeout(() => {
+        if (S.cur >= 0 && S.auto && !S.bgTranslateMode && !S.autoHalted && S.chapters.length > 0) {
+          flowLog(2, 'Người dùng ngưng thao tác 30s — tự động kích hoạt Dịch Ngầm Liên Tục.');
+          toggleBgTranslateMode(true);
+        }
+      }, 30000);
+    }
+    ['scroll', 'mousemove', 'keydown', 'touchstart', 'click'].forEach(evt => {
+      window.addEventListener(evt, resetIdleTimer, { passive: true });
+    });
+
+    // "all" (Tất cả chương chưa đọc) HOẶC khi đang ở chế độ Dịch Ngầm Liên Tục → trả về Infinity: mọi nơi dùng pc đều tự giới hạn lại bằng
     // S.chapters.length (i<S.chapters.length trong ensurePreload, Math.min(...,S.cur+pc) trong
     // ensureAnalyzePipeline...) nên Infinity an toàn, không cần sửa gì thêm ở các hàm dùng pc.
     function getPreloadCount() {
+      if (S.bgTranslateMode) return Infinity;
       const v = document.getElementById('preloadCount').value;
       if (v === 'all') return Infinity;
       return Math.max(0, parseInt(v) || 5);
