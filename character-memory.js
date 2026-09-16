@@ -101,6 +101,34 @@ function updCharMemToggleBtn(){
 
 // ===== LƯU TRỮ (theo từng bộ truyện) =====
 function charMemStorageKey(){return 'dich-charm:'+(S.fname||'__noname__');}
+
+// Quét và tự động di chuyển các key dich-charm:* / dich-charm-guidance:* từ localStorage sang IndexedDB
+// để giải phóng ngay lập tức dung lượng 5MB bị nghẽn của localStorage cho người dùng.
+async function cleanupCharMemLocalStorage(){
+  try{
+    if(typeof cfgSet!=='function')return;
+    const keysToRemove=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      if(k&&(k.startsWith('dich-charm:')||k.startsWith('dich-charm-guidance:'))){
+        keysToRemove.push(k);
+      }
+    }
+    for(const k of keysToRemove){
+      const val=localStorage.getItem(k);
+      if(val){
+        await cfgSet(k, val);
+        localStorage.removeItem(k);
+      }
+    }
+    if(keysToRemove.length>0){
+      console.log(`[Luồng 1][Lưu trữ] Đã tự động di chuyển ${keysToRemove.length} bộ nhớ nhân vật từ localStorage sang IndexedDB và giải phóng dung lượng.`);
+    }
+  }catch(e){
+    console.warn('[Luồng 1][Lưu trữ] Lỗi khi dọn dẹp localStorage charMem',e);
+  }
+}
+
 async function loadCharacterMemory(){
   let list=[];
   if(libCurrentId){
@@ -110,14 +138,33 @@ async function loadCharacterMemory(){
     }catch(e){list=[];}
   } else {
     try{
-      const v=localStorage.getItem(charMemStorageKey());
-      list=v?JSON.parse(v):[];
+      const key=charMemStorageKey();
+      let raw=null;
+      if(typeof cfgGet==='function'){
+        raw=await cfgGet(key);
+      }
+      if(!raw){
+        const lsVal=localStorage.getItem(key);
+        if(lsVal){
+          raw=lsVal;
+          if(typeof cfgSet==='function'){
+            try{
+              await cfgSet(key, lsVal);
+              localStorage.removeItem(key);
+            }catch(_){}
+          }
+        }
+      }
+      list=typeof raw==='string'?JSON.parse(raw):(Array.isArray(raw)?raw:[]);
     }catch(e){list=[];}
   }
   S.characters=Array.isArray(list)?list:[];
   if(cleanupUnknownAddrValues(S.characters))await saveCharacterMemory();
   if(document.getElementById('charmemDrawer'))renderCharList();
+  // Tiến hành dọn dẹp giải phóng localStorage chạy ngầm
+  cleanupCharMemLocalStorage();
 }
+
 async function saveCharacterMemory(){
   if(libCurrentId){
     try{
@@ -125,13 +172,33 @@ async function saveCharacterMemory(){
       if(bk){bk.characters=S.characters;await libPut(bk);return;}
     }catch(e){console.warn('[Luồng 1][Lưu trữ] Lỗi lưu vào IndexedDB',e);}
   }
+  const key=charMemStorageKey();
+  const dataStr=JSON.stringify(S.characters);
+  // Ưu tiên lưu vào IndexedDB (cfgSet) — dung lượng GBs, không bị hạn chế 5MB của localStorage
+  if(typeof cfgSet==='function'){
+    try{
+      const ok=await cfgSet(key, dataStr);
+      if(ok){
+        try{localStorage.removeItem(key);}catch(e){}
+        return;
+      }
+    }catch(e){
+      console.warn('[Luồng 1][Lưu trữ] Lỗi lưu vào IndexedDB cfgSet',e);
+    }
+  }
+  // Fallback sang localStorage nếu IndexedDB gặp lỗi
   try{
-    localStorage.setItem(charMemStorageKey(),JSON.stringify(S.characters));
+    localStorage.setItem(key,dataStr);
   }catch(e){
     console.warn('[Luồng 1][Lưu trữ] Lỗi lưu vào localStorage (có thể do đầy dung lượng trình duyệt)',e);
+    cleanupCharMemLocalStorage();
+    try{
+      localStorage.setItem(key,dataStr);
+      return;
+    }catch(e2){}
     if(!_charMemSaveWarned&&typeof showInfoPopup==='function'){
       _charMemSaveWarned=true;
-      showInfoPopup('Không lưu được dữ liệu nhân vật','Bộ nhớ trình duyệt (localStorage) có thể đã đầy nên các thay đổi về nhân vật trong bộ truyện này chưa được lưu lại. Hãy thử xoá bớt dữ liệu cũ hoặc chuyển bộ truyện này vào Thư viện để lưu ổn định hơn.');
+      showInfoPopup('Không lưu được dữ liệu nhân vật','Bộ nhớ trình duyệt (localStorage) có thể đã đầy. Hãy thử thêm bộ truyện này vào Tủ truyện (Thư viện) để lưu ổn định hơn trên IndexedDB.');
     }
   }
 }
@@ -871,8 +938,23 @@ async function getMainPromptGuidance(){
     const mainPrompt=(typeof getPrompt==='function')?getPrompt():'';
     if(!mainPrompt)return '';
     const hash=simpleHash(mainPrompt);
+    const gKey=promptGuidanceStorageKey();
     let cache=null;
-    try{cache=JSON.parse(localStorage.getItem(promptGuidanceStorageKey())||'null');}catch(e){cache=null;}
+    if(typeof cfgGet==='function'){
+      try{
+        const v=await cfgGet(gKey);
+        cache=typeof v==='string'?JSON.parse(v):(typeof v==='object'?v:null);
+      }catch(e){}
+    }
+    if(!cache){
+      try{
+        const lsVal=localStorage.getItem(gKey);
+        if(lsVal){
+          cache=JSON.parse(lsVal);
+          if(typeof cfgSet==='function'){try{await cfgSet(gKey, lsVal);localStorage.removeItem(gKey);}catch(_){}}
+        }
+      }catch(e){cache=null;}
+    }
     if(cache&&cache.hash===hash)return cache.guidance||'';
     const keys=getKeys();
     // Chưa có key để gọi API: nếu cache cũ (dù đã lệch hash vì prompt vừa đổi) vẫn còn, thà dùng tạm
@@ -888,7 +970,12 @@ async function getMainPromptGuidance(){
     // Model đôi khi trả nguyên chữ "" hoặc '' thay vì để trống thật khi không có gì liên quan.
     if(rawText==='""'||rawText==="''")rawText='';
     const guidance=rawText.slice(0,1500); // lưới an toàn phòng model bỏ qua giới hạn ~120 từ đã dặn
-    try{localStorage.setItem(promptGuidanceStorageKey(),JSON.stringify({hash,guidance,ts:Date.now()}));}catch(e){}
+    const gPayload=JSON.stringify({hash,guidance,ts:Date.now()});
+    if(typeof cfgSet==='function'){
+      try{await cfgSet(gKey, gPayload);localStorage.removeItem(gKey);}catch(e){}
+    }else{
+      try{localStorage.setItem(gKey,gPayload);}catch(e){}
+    }
     console.log(guidance
       ?`[Luồng 1][Chưng cất prompt] Đã chưng cất chỉ dẫn xưng hô/thể loại từ prompt dịch chính:\n${guidance}`
       :'[Luồng 1][Chưng cất prompt] Prompt dịch chính không có nội dung nào liên quan xưng hô/thể loại — không có chỉ dẫn thêm.');
