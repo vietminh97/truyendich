@@ -4965,12 +4965,23 @@
           }
         } catch (e) { console.warn('[Session] IndexedDB save failed, falling back to localStorage', e); }
       }
-      // Fallback: localStorage
+      // Fallback: IndexedDB cfgSet -> localStorage
+      const data2 = { translations: S.translations, translatedTitles: S.translatedTitles, audited: S.audited, fname: S.fname, cur: S.cur, ts: Date.now(), chapterTitles: S.chapters.map(ch => ch.title) };
+      const sKey = sessionKey();
+      if (typeof cfgSet === 'function') {
+        try {
+          const ok = await cfgSet(sKey, JSON.stringify(data2));
+          if (ok) {
+            try { localStorage.removeItem(sKey); } catch (e) { }
+            try { sessionStorage.setItem('dich-cur:' + S.fname, String(S.cur)); } catch (e) { }
+            return;
+          }
+        } catch (e) { }
+      }
       try {
-        const data2 = { translations: S.translations, translatedTitles: S.translatedTitles, audited: S.audited, fname: S.fname, cur: S.cur, ts: Date.now(), chapterTitles: S.chapters.map(ch => ch.title) };
-        localStorage.setItem(sessionKey(), JSON.stringify(data2));
+        localStorage.setItem(sKey, JSON.stringify(data2));
       } catch (e) {
-        try { localStorage.setItem(sessionKey(), JSON.stringify(data)); } catch (e2) { }
+        try { localStorage.setItem(sKey, JSON.stringify(data)); } catch (e2) { }
       }
       // Fallback cuối: sessionStorage (luôn hoạt động kể cả khi localStorage bị chặn)
       try { sessionStorage.setItem('dich-cur:' + S.fname, String(S.cur)); } catch (e) { }
@@ -4978,8 +4989,6 @@
 
     // Đọc bản dịch: thử IndexedDB trước (đã được libOpen load vào bk), sau đó localStorage
     function loadSession(fname) {
-      // IndexedDB path: dữ liệu đã được load trong libOpen → S.translations được set từ bk
-      // Hàm này chỉ dùng cho localStorage fallback
       try {
         const v = localStorage.getItem('dich-tr:' + fname);
         if (!v) return null;

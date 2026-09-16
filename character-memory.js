@@ -102,7 +102,7 @@ function updCharMemToggleBtn(){
 // ===== LƯU TRỮ (theo từng bộ truyện) =====
 function charMemStorageKey(){return 'dich-charm:'+(S.fname||'__noname__');}
 
-// Quét và tự động di chuyển các key dich-charm:* / dich-charm-guidance:* từ localStorage sang IndexedDB
+// Quét và tự động di chuyển các key dich-charm:* / dich-charm-guidance:* / dich-tr:* từ localStorage sang IndexedDB
 // để giải phóng ngay lập tức dung lượng 5MB bị nghẽn của localStorage cho người dùng.
 async function cleanupCharMemLocalStorage(){
   try{
@@ -110,7 +110,7 @@ async function cleanupCharMemLocalStorage(){
     const keysToRemove=[];
     for(let i=0;i<localStorage.length;i++){
       const k=localStorage.key(i);
-      if(k&&(k.startsWith('dich-charm:')||k.startsWith('dich-charm-guidance:'))){
+      if(k&&(k.startsWith('dich-charm:')||k.startsWith('dich-charm-guidance:')||k.startsWith('dich-tr:'))){
         keysToRemove.push(k);
       }
     }
@@ -122,7 +122,7 @@ async function cleanupCharMemLocalStorage(){
       }
     }
     if(keysToRemove.length>0){
-      console.log(`[Luồng 1][Lưu trữ] Đã tự động di chuyển ${keysToRemove.length} bộ nhớ nhân vật từ localStorage sang IndexedDB và giải phóng dung lượng.`);
+      console.log(`[Luồng 1][Lưu trữ] Đã tự động di chuyển ${keysToRemove.length} bộ nhớ/bản dịch từ localStorage sang IndexedDB và giải phóng dung lượng.`);
     }
   }catch(e){
     console.warn('[Luồng 1][Lưu trữ] Lỗi khi dọn dẹp localStorage charMem',e);
