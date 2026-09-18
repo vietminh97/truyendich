@@ -5881,11 +5881,6 @@
         <div class="home-story-grid">
           ${cardsHtml.length ? cardsHtml : `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text3);background:var(--bg2);border-radius:14px;border:1px dashed var(--border2);">Không tìm thấy truyện nào khớp với từ khóa "${esc(homeSearchQuery)}"</div>`}
         </div>
-
-        <div class="home-quick-dropzone" onclick="document.getElementById('fileInput').click()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Nhấn để mở file hoặc kéo thả tệp TXT / EPUB vào đây để thêm truyện mới
-        </div>
       `;
     }
 
