@@ -1871,11 +1871,34 @@
     return Math.max(0.5, (blockText || '').length / MSE_CHARS_PER_SEC);
   }
 
+  // Tìm khối chứa mốc thời gian muốn tiếp tục nghe (dựa trên ước lượng thời
+  // lượng từng khối theo số ký tự — xem estimateBlockDuration). Trả về chỉ số
+  // khối, tổng thời lượng ước tính của các khối ĐỨNG TRƯỚC nó (baseOffset), và
+  // vị trí lệch bên trong khối đó (offsetInBlock). Dùng để chỉ tổng hợp giọng
+  // đọc TỪ khối này trở đi khi "Nghe tiếp", thay vì phải chờ tổng hợp lại từ
+  // đầu chương rồi mới tua tới — tiết kiệm thời gian chờ và băng thông.
+  function locateResumeBlock(blocks, targetTime) {
+    let acc = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const d = estimateBlockDuration(blocks[i]);
+      if (targetTime < acc + d || i === blocks.length - 1) {
+        return { idx: i, baseOffset: acc, offsetInBlock: Math.max(0, targetTime - acc) };
+      }
+      acc += d;
+    }
+    return { idx: 0, baseOffset: 0, offsetInBlock: 0 };
+  }
+
   // Thử phát tiến triển qua MSE. Trả về true nếu đã bắt tay MSE thành công
   // (mọi việc còn lại — tải ngầm, phát, chờ buffer — tự chạy nền từ đây).
   // Trả về false nếu MSE lỗi ngay từ bước mở — gọi nơi dùng nên rơi về nhánh
   // "chờ tải xong cả chương" như cũ.
-  async function startReadingMSE(blocks, myToken) {
+  // baseOffset: thời lượng ước tính của các khối bị bỏ qua đứng trước `blocks`
+  // (khi "Nghe tiếp" từ 1 khối giữa chương) — dịch mốc thời gian của toàn bộ
+  // luồng MSE để timeline/tiến trình vẫn khớp với vị trí thật trong chương.
+  // initialSeekTime: vị trí (tính theo timeline đã dịch bởi baseOffset) cần
+  // tua tới ngay khi khối đầu tiên vừa nạp xong.
+  async function startReadingMSE(blocks, myToken, baseOffset = 0, initialSeekTime = 0) {
     let mediaSource;
     try {
       mediaSource = new MediaSource();
@@ -1891,7 +1914,8 @@
     let playbackStarted = false;
     let deliveredCount = 0;
     let waitingWatchdog = null;
-    const totalEstimatedDuration = blocks.reduce((s, b) => s + estimateBlockDuration(b), 0);
+    let pendingInitialSeek = initialSeekTime > 0;
+    const totalEstimatedDuration = baseOffset + blocks.reduce((s, b) => s + estimateBlockDuration(b), 0);
 
     function pump() {
       if (!sourceBuffer || sbUpdating) return;
@@ -1921,12 +1945,17 @@
         clearTimeout(timer);
         try {
           sourceBuffer = mediaSource.addSourceBuffer(MSE_MIME);
+          if (baseOffset > 0) sourceBuffer.timestampOffset = baseOffset;
         } catch (_) {
           resolve(false);
           return;
         }
         sourceBuffer.addEventListener('updateend', () => {
           sbUpdating = false;
+          if (pendingInitialSeek) {
+            pendingInitialSeek = false;
+            try { audio.currentTime = initialSeekTime; } catch (_) {}
+          }
           pump();
         });
         sourceBuffer.addEventListener('error', () => { sbUpdating = false; });
@@ -2020,7 +2049,7 @@
         stopReading('Lỗi tổng hợp giọng đọc cho chương này. Vui lòng thử lại.');
         return;
       }
-      if (mergedBlob) state.fullChapterBlob = mergedBlob;
+      if (mergedBlob && baseOffset === 0) state.fullChapterBlob = mergedBlob;
       state.allBlocksReady = true;
       state.isBuffering = false;
       showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
@@ -2094,7 +2123,13 @@
     return chapterAudio ? (chapterAudio.duration || 0) : 0;
   }
 
-  function startReadingChain(blocks, myToken) {
+  // baseOffset: thời lượng ước tính của các khối bị bỏ qua đứng trước `blocks`
+  // (khi "Nghe tiếp" từ 1 khối giữa chương thay vì từ đầu) — cộng vào mọi mốc
+  // thời gian engine báo ra (getCurrentTime/getDuration/seekTo) để tiến trình
+  // vẫn khớp với vị trí thật trong chương dù chỉ tổng hợp từ khối đó trở đi.
+  // initialOffsetInFirstBlock: vị trí lệch bên trong khối ĐẦU TIÊN của `blocks`
+  // cần tua tới ngay khi bắt đầu phát (phần còn lại trong khối đó).
+  function startReadingChain(blocks, myToken, baseOffset = 0, initialOffsetInFirstBlock = 0) {
     const total = blocks.length;
     if (!total) return null;
 
@@ -2115,6 +2150,7 @@
         waitingForIdx: -1,
         warnedForIdx: -1,
         watchdog: null,
+        baseOffset,
       };
     } catch (_) {
       return null;
@@ -2329,7 +2365,7 @@
           clearStall();
           // Người dùng đã bấm Tạm dừng ngay trong lúc đang tải → nạp sẵn
           // nhưng không tự phát, giống nhánh MSE và nhánh blob đầy đủ.
-          playBlock(nx.idx, 0, state.uiState !== 'paused');
+          playBlock(nx.idx, initialOffsetInFirstBlock, state.uiState !== 'paused');
           return;
         }
 
@@ -2358,14 +2394,14 @@
       },
 
       getCurrentTime() {
-        let acc = 0;
+        let acc = eng.baseOffset;
         for (let i = 0; i < eng.curIdx; i++) acc += (eng.durations[i] || eng.estimates[i]);
         const p = eng.players[eng.activeIdx];
         return acc + ((p && p.currentTime) || 0);
       },
 
       getDuration() {
-        let sum = 0;
+        let sum = eng.baseOffset;
         for (let i = 0; i < total; i++) sum += (eng.durations[i] || eng.estimates[i]);
         return sum;
       },
@@ -2384,6 +2420,7 @@
       },
 
       seekTo(sec) {
+        sec = Math.max(0, sec - eng.baseOffset);
         let acc = 0;
         let target = -1;
         let offset = 0;
@@ -2788,13 +2825,24 @@
       return;
     }
 
+    // "Nghe tiếp" từ vị trí đã lưu: tính xem mốc thời gian đó rơi vào khối
+    // (đoạn) nào (xem locateResumeBlock()), rồi CHỈ tổng hợp giọng đọc từ
+    // khối đó trở đi — bỏ qua tổng hợp các khối đứng trước (đã nghe rồi) để
+    // không phải chờ dựng lại từ đầu chương mỗi lần bấm "Nghe tiếp".
+    let playBlocks = blocks;
+    let resumeBaseOffset = 0;
+    let resumeOffsetInBlock = 0;
+    if (forceResumeTime > 0) {
+      const loc = locateResumeBlock(blocks, forceResumeTime);
+      resumeBaseOffset = loc.baseOffset;
+      resumeOffsetInBlock = loc.offsetInBlock;
+      playBlocks = blocks.slice(loc.idx);
+    }
+
     // Phát tiến triển qua MSE khi máy hỗ trợ — nghe được ngay khi có đoạn
-    // đầu, các đoạn sau nạp ngầm KHÔNG giật (xem startReadingMSE()). Chỉ áp
-    // dụng cho lượt phát MỚI hoàn toàn (forceResumeTime <= 0) — trường hợp
-    // tiếp tục từ vị trí đã lưu (mở lại chương cũ) vẫn dùng nhánh chờ tải
-    // xong cả chương bên dưới cho chắc (ít nhạy cảm về tốc độ hơn).
-    if (forceResumeTime <= 0 && mseSupported()) {
-      const started = await startReadingMSE(blocks, myToken);
+    // đầu, các đoạn sau nạp ngầm KHÔNG giật (xem startReadingMSE()).
+    if (mseSupported()) {
+      const started = await startReadingMSE(playBlocks, myToken, resumeBaseOffset, resumeOffsetInBlock);
       if (myToken !== state.token) return;
       if (started) return;
     }
@@ -2803,10 +2851,10 @@
     // luân phiên — nghe được ngay khi có đoạn đầu, đoạn sau nạp sẵn từ trước,
     // và tự động chờ (buffer) nếu nghe nhanh hơn tải (2x-3x). Xem
     // startReadingChain().
-    if (forceResumeTime <= 0) {
-      const chain = startReadingChain(blocks, myToken);
+    {
+      const chain = startReadingChain(playBlocks, myToken, resumeBaseOffset, resumeOffsetInBlock);
       if (chain) {
-        synthesizeBlocksParallel(blocks, myToken, (done, total) => {
+        synthesizeBlocksParallel(playBlocks, myToken, (done, total) => {
           if (myToken !== state.token || chain.hasStarted()) return;
           const pct = Math.round((done / total) * 100);
           if (ui.progressBar) ui.progressBar.style.width = pct + '%';
@@ -2825,7 +2873,7 @@
             stopReading('Lỗi tổng hợp giọng đọc cho chương này. Vui lòng thử lại.');
             return;
           }
-          if (mergedBlob) state.fullChapterBlob = mergedBlob;
+          if (mergedBlob && resumeBaseOffset === 0) state.fullChapterBlob = mergedBlob;
           state.allBlocksReady = true;
           state.isBuffering = false;
           showLoadingBanner('Đã nạp xong toàn bộ chương!', 100);
