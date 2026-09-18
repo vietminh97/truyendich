@@ -3021,17 +3021,276 @@
       line-height: 1.8;
     }
 
-    /* upload screen */
+    /* upload screen & homepage story list */
     .upload-screen {
       flex: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      gap: 14px;
+      justify-content: flex-start;
       background: var(--reading-bg);
-      padding: 0 20px;
+      padding: 24px 20px;
       box-sizing: border-box;
+      overflow-y: auto;
+      width: 100%;
+    }
+
+    .home-container {
+      max-width: 1100px;
+      width: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .home-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      background: var(--bg2);
+      border: 1px solid var(--border2);
+      padding: 16px 20px;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.03);
+    }
+
+    .home-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .home-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .home-badge-count {
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 12px;
+    }
+
+    .home-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .home-search-input {
+      border: 1px solid var(--border2);
+      border-radius: 9px;
+      background: var(--input-bg);
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 13.5px;
+      width: 210px;
+      transition: all 0.2s;
+    }
+
+    .home-search-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-alpha, rgba(79, 70, 229, 0.15));
+    }
+
+    .home-story-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 18px;
+    }
+
+    .home-card {
+      background: var(--bg2);
+      border: 1px solid var(--border2);
+      border-radius: 14px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 14px;
+      position: relative;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+    }
+
+    .home-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      border-color: var(--accent);
+    }
+
+    .home-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .home-card-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .home-card-badge.unread {
+      background: rgba(107, 114, 128, 0.12);
+      color: var(--text3);
+    }
+
+    .home-card-badge.reading {
+      background: rgba(79, 70, 229, 0.12);
+      color: var(--accent);
+    }
+
+    .home-card-badge.finished {
+      background: rgba(16, 185, 129, 0.12);
+      color: #10b981;
+    }
+
+    .home-card-title {
+      font-size: 16.5px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.35;
+      margin-top: 4px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .home-card-author {
+      font-size: 13px;
+      color: var(--text3);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 4px;
+    }
+
+    .home-card-chaps {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+    }
+
+    .home-progress-bar-wrap {
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 6px;
+    }
+
+    .home-progress-bar {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    .home-card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      margin-top: 4px;
+    }
+
+    .home-card-time {
+      font-size: 12px;
+      color: var(--text4);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .home-card-btn {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 8px;
+    }
+
+    .home-quick-dropzone {
+      border: 2px dashed var(--border2);
+      border-radius: 14px;
+      padding: 20px;
+      text-align: center;
+      background: var(--bg2);
+      color: var(--text3);
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .home-quick-dropzone:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--btn-hover);
+    }
+
+    .home-empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      text-align: center;
+      background: var(--bg2);
+      border: 1px solid var(--border2);
+      border-radius: 16px;
+      max-width: 520px;
+      margin: 40px auto;
+    }
+
+    .home-empty-icon {
+      margin-bottom: 16px;
+    }
+
+    .home-empty-title {
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .home-empty-sub {
+      font-size: 14px;
+      color: var(--text3);
+      max-width: 440px;
+      margin-bottom: 20px;
+      line-height: 1.5;
     }
 
     .upload-box {
@@ -3856,7 +4115,7 @@
 
   <!-- HEADER -->
   <div class="hdr" id="hdr">
-    <span class="hdr-logo" style="display:inline-flex;align-items:center;"><span
+    <span class="hdr-logo" onclick="resetToUploadScreen()" style="display:inline-flex;align-items:center;cursor:pointer;" title="Về trang chủ"><span
         style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;background:var(--accent);border-radius:7px;margin-right:8px;flex-shrink:0;"><svg
           width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"
           stroke-linejoin="round">
@@ -4835,17 +5094,7 @@
       <!-- Reading -->
       <div class="reading-area" id="readingArea">
         <div class="upload-screen" id="uploadScreen">
-          <div class="upload-box" onclick="document.getElementById('fileInput').click()">
-            <div class="uico"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="12" y1="18" x2="12" y2="12" />
-                <line x1="9" y1="15" x2="15" y2="15" />
-              </svg></div>
-            <div class="utitle">Mở file truyện TXT / EPUB</div>
-            <div class="usub">Nhấn để chọn file hoặc kéo thả vào đây</div>
-          </div>
+          <div class="home-container" id="homeContainer"></div>
         </div>
         <div id="chView" style="display:none;">
           <div class="reading-inner">
@@ -4951,6 +5200,7 @@
             bk.translatedTitles = S.translatedTitles;
             bk.audited = S.audited;
             bk.cur = S.cur;
+            bk.totalCh = S.chapters.length || bk.totalCh || 0;
             bk.ts = Date.now();
             // Cập nhật luôn lastOpen mỗi khi tiến độ đọc thay đổi (không chỉ lúc mở sách
             // từ tủ truyện) — để tủ truyện luôn sắp xếp/hiện đúng thời gian đọc gần nhất
@@ -5035,7 +5285,15 @@
 
     // Rút gọn 1 record sách đầy đủ thành bản ghi nhẹ cho META_STORE.
     function bookToMeta(bk) {
-      return { id: bk.id, name: bk.name, cur: bk.cur ?? -1, added: bk.added || Date.now(), lastOpen: bk.lastOpen || bk.added || Date.now() };
+      return {
+        id: bk.id,
+        name: bk.name,
+        author: bk.author || 'Chưa rõ',
+        cur: bk.cur ?? -1,
+        totalCh: bk.totalCh || (bk.chapterTitles ? bk.chapterTitles.length : 0),
+        added: bk.added || Date.now(),
+        lastOpen: bk.lastOpen || bk.added || Date.now()
+      };
     }
 
     function openLibDB() {
@@ -5354,6 +5612,55 @@
       return fmtDate(ts);
     }
 
+    let homeSearchQuery = '';
+
+    function extractAuthorFromTxt(text) {
+      if (!text) return '';
+      const sample = text.slice(0, 5000);
+      const m = sample.match(/(?:Tác\s*giả|Tac\s*gia|Author|作\s*者)\s*[:：]\s*([^\r\n]+)/i);
+      if (m && m[1]) {
+        let a = m[1].trim();
+        a = a.replace(/^[【\[\s]+|[】\]\s]+$/g, '');
+        return a;
+      }
+      return '';
+    }
+
+    async function libEditMetaPopup(id) {
+      const bk = await libGet(id);
+      if (!bk) return;
+      showPopup({
+        title: 'Sửa thông tin truyện',
+        msg: `
+          <div style="display:flex;flex-direction:column;gap:12px;text-align:left;margin-top:8px;">
+            <div>
+              <label style="font-weight:600;font-size:13px;display:block;margin-bottom:4px;color:var(--text);">Tên truyện</label>
+              <input type="text" id="metaEditName" class="popup-input" value="${esc(bk.name)}" style="width:100%;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-weight:600;font-size:13px;display:block;margin-bottom:4px;color:var(--text);">Tác giả</label>
+              <input type="text" id="metaEditAuthor" class="popup-input" value="${esc(bk.author && bk.author !== 'Chưa rõ' ? bk.author : '')}" placeholder="Nhập tên tác giả..." style="width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+        `,
+        btns: [
+          {
+            label: 'Lưu', cls: 'btn-p', cb: async () => {
+              const nameVal = document.getElementById('metaEditName')?.value.trim();
+              const authorVal = document.getElementById('metaEditAuthor')?.value.trim();
+              if (nameVal) {
+                bk.name = nameVal;
+                bk.author = authorVal || 'Chưa rõ';
+                await libPut(bk);
+                await libLoad();
+              }
+            }
+          },
+          { label: 'Hủy', cls: 'btn' }
+        ]
+      });
+    }
+
     function setLibSort(mode) {
       libSort = mode;
       localStorage.setItem('dich-lib-sort', mode);
@@ -5369,6 +5676,7 @@
         libBooks.sort((a, b) => (b.lastOpen || 0) - (a.lastOpen || 0));
       }
       renderLib();
+      renderHomeLib();
     }
 
     async function libLoad() {
@@ -5395,7 +5703,10 @@
         const isActive = id === libCurrentId;
         const isEditing = libEditingId === id;
         const isMenuOpen = libOpenMenuId === id;
-        const chapLabel = 'Chương ' + ((bk.cur ?? 0) + 1);
+        const readCh = (bk.cur !== undefined && bk.cur >= 0) ? (bk.cur + 1) : 0;
+        const totalCh = bk.totalCh || 0;
+        const chapLabel = 'Chương ' + readCh + (totalCh ? ' / ' + totalCh : '');
+        const authorInline = bk.author && bk.author !== 'Chưa rõ' ? `<span class="lib-sep">•</span><span style="color:var(--text3);">${esc(bk.author)}</span>` : '';
         const timeLabel = isActive ? 'Đang đọc' : formatLastRead(bk.lastOpen || bk.added || Date.now());
 
         const nameField = isEditing
@@ -5411,7 +5722,7 @@
       <div class="lib-main">
         <div class="lib-content">
           ${nameField}
-          ${isEditing ? '' : `<div class="lib-meta-inline"><b>${esc(chapLabel)}</b><span class="lib-sep">•</span>${esc(timeLabel)}</div>`}
+          ${isEditing ? '' : `<div class="lib-meta-inline"><b>${esc(chapLabel)}</b>${authorInline}<span class="lib-sep">•</span>${esc(timeLabel)}</div>`}
         </div>
 
         <div class="lib-kebab-wrap">
@@ -5422,6 +5733,7 @@
           <button class="lib-kebab-btn${isMenuOpen ? ' open' : ''}" onclick="libToggleMenu(event,'${id}')" aria-label="Tuỳ chọn">${LIB_ICONS.kebab}</button>
           <div class="lib-menu${isMenuOpen ? ' open' : ''}">
             <button onclick="libStartEdit(event,'${id}');">${LIB_ICONS.edit}Đổi tên</button>
+            <button onclick="libEditMetaPopup('${id}');"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Sửa thông tin</button>
             <button class="danger" onclick="libRemove(event,'${id}')">${LIB_ICONS.trash}Xóa khỏi tủ</button>
           </div>
           `}
@@ -5438,6 +5750,143 @@
           input.focus(); input.select();
         }
       }
+    }
+
+    function renderHomeLib() {
+      const container = document.getElementById('homeContainer');
+      if (!container) return;
+
+      if (!libBooks.length) {
+        container.innerHTML = `
+          <div class="home-empty-state">
+            <div class="home-empty-icon">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                <path d="m12 8 2 4 4 2-4 2-2 4-2-4-4-2 4-2z" fill="var(--accent)" stroke="none"/>
+              </svg>
+            </div>
+            <div class="home-empty-title">Tủ sách của bạn hiện chưa có truyện nào</div>
+            <div class="home-empty-sub">Hãy mở hoặc kéo thả tệp TXT / EPUB vào đây để bắt đầu đọc và dịch bằng AI</div>
+            <button class="btn btn-p" style="padding:10px 24px;font-size:14px;border-radius:10px;" onclick="document.getElementById('fileInput').click()">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Mở file truyện TXT / EPUB
+            </button>
+          </div>
+        `;
+        return;
+      }
+
+      const query = homeSearchQuery.trim().toLowerCase();
+      const filtered = libBooks.filter(bk => {
+        if (!query) return true;
+        const nameMatch = (bk.name || '').toLowerCase().includes(query);
+        const authorMatch = (bk.author || '').toLowerCase().includes(query);
+        return nameMatch || authorMatch;
+      });
+
+      const cardsHtml = filtered.map(bk => {
+        const id = bk.id;
+        const isActive = id === libCurrentId;
+        const readCh = (bk.cur !== undefined && bk.cur >= 0) ? (bk.cur + 1) : 0;
+        const totalCh = bk.totalCh || 0;
+        const pct = totalCh > 0 ? Math.min(100, Math.round((readCh / totalCh) * 100)) : 0;
+        
+        let badgeLabel = 'Chưa đọc';
+        let badgeClass = 'unread';
+        if (readCh > 0) {
+          if (totalCh > 0 && readCh >= totalCh) {
+            badgeLabel = 'Hoàn thành';
+            badgeClass = 'finished';
+          } else {
+            badgeLabel = totalCh > 0 ? `Đang đọc ${pct}%` : `Đã đọc ${readCh} ch.`;
+            badgeClass = 'reading';
+          }
+        }
+
+        const authorText = bk.author && bk.author !== 'Chưa rõ' ? bk.author : 'Chưa rõ';
+        const timeLabel = isActive ? 'Đang đọc' : formatLastRead(bk.lastOpen || bk.added || Date.now());
+        const readLabel = totalCh > 0 
+          ? (readCh > 0 ? `Đã đọc ${readCh} / ${totalCh} chương` : `0 / ${totalCh} chương`)
+          : (readCh > 0 ? `Đã đọc ${readCh} chương` : 'Chưa đọc');
+        const btnLabel = readCh > 0 ? 'Đọc tiếp' : 'Bắt đầu đọc';
+
+        return `
+          <div class="home-card" onclick="libItemClick(event,'${id}')">
+            <div class="home-card-header">
+              <span class="home-card-badge ${badgeClass}">${esc(badgeLabel)}</span>
+              <div style="position:relative;">
+                <button class="lib-kebab-btn${libOpenMenuId === id ? ' open' : ''}" onclick="libToggleMenu(event,'${id}')" title="Tùy chọn">${LIB_ICONS.kebab}</button>
+                <div class="lib-menu${libOpenMenuId === id ? ' open' : ''}">
+                  <button onclick="libEditMetaPopup('${id}');"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Sửa thông tin</button>
+                  <button class="danger" onclick="libRemove(event,'${id}')">${LIB_ICONS.trash}Xóa khỏi tủ</button>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="home-card-title" title="${esc(bk.name)}">${esc(bk.name)}</div>
+              <div class="home-card-author">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                Tác giả: ${esc(authorText)}
+              </div>
+            </div>
+
+            <div>
+              <div class="home-card-chaps">
+                <span>📖 ${esc(readLabel)}</span>
+                ${totalCh > 0 ? `<span style="color:var(--text3);font-size:12px;">${pct}%</span>` : ''}
+              </div>
+              ${totalCh > 0 ? `
+                <div class="home-progress-bar-wrap">
+                  <div class="home-progress-bar" style="width: ${pct}%;"></div>
+                </div>
+              ` : ''}
+              
+              <div class="home-card-footer">
+                <div class="home-card-time">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  ${esc(timeLabel)}
+                </div>
+                <button class="btn btn-p home-card-btn" onclick="libItemClick(event,'${id}')">${esc(btnLabel)}</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="home-header">
+          <div class="home-title-group">
+            <span class="home-title">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+              </svg>
+              Tủ sách của bạn
+            </span>
+            <span class="home-badge-count">${libBooks.length} truyện</span>
+          </div>
+
+          <div class="home-controls">
+            <input type="text" class="home-search-input" placeholder="Tìm tên truyện, tác giả..." value="${esc(homeSearchQuery)}" oninput="homeSearchQuery=this.value;renderHomeLib();">
+            
+            <button class="btn btn-p" style="padding:8px 16px;border-radius:9px;font-size:13.5px;" onclick="document.getElementById('fileInput').click()">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Thêm truyện mới
+            </button>
+          </div>
+        </div>
+
+        <div class="home-story-grid">
+          ${cardsHtml.length ? cardsHtml : `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text3);background:var(--bg2);border-radius:14px;border:1px dashed var(--border2);">Không tìm thấy truyện nào khớp với từ khóa "${esc(homeSearchQuery)}"</div>`}
+        </div>
+
+        <div class="home-quick-dropzone" onclick="document.getElementById('fileInput').click()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Nhấn để mở file hoặc kéo thả tệp TXT / EPUB vào đây để thêm truyện mới
+        </div>
+      `;
     }
 
     // Click vào hàng để mở truyện, trừ khi click rơi vào nút/menu/ô nhập bên trong hàng
@@ -5544,8 +5993,9 @@
     }
 
     // Khi load file mới: kiểm tra tương đồng, hỏi thay thế hay thêm mới
-    async function libHandleNewFile(content, fname) {
+    async function libHandleNewFile(content, fname, authorHint) {
       const rawName = fname.replace(/\.[^.]+$/, ''); // bỏ đuôi .txt
+      const author = authorHint || extractAuthorFromTxt(content) || 'Chưa rõ';
       const books = await libGetAll();
 
       // Tìm sách tương đồng
@@ -5558,7 +6008,7 @@
           btns: [
             {
               label: 'Cập nhật truyện cũ', cls: 'btn-p', cb: async () => {
-                const updated = { ...similar, content, fname, size: content.length, lastOpen: Date.now() };
+                const updated = { ...similar, content, fname, author: (similar.author && similar.author !== 'Chưa rõ') ? similar.author : author, size: content.length, lastOpen: Date.now() };
                 try {
                   await libPut(updated);
                   libCurrentId = similar.id;
@@ -5575,19 +6025,19 @@
             },
             {
               label: 'Thêm mới', cls: 'btn', cb: async () => {
-                await libAddNew(content, fname, rawName);
+                await libAddNew(content, fname, rawName, author);
               }
             },
           ]
         });
       } else {
-        await libAddNew(content, fname, rawName);
+        await libAddNew(content, fname, rawName, author);
       }
     }
 
-    async function libAddNew(content, fname, name) {
+    async function libAddNew(content, fname, name, author) {
       const id = 'bk-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-      const bk = { id, name, fname, content, size: content.length, added: Date.now(), lastOpen: Date.now() };
+      const bk = { id, name, author: author || 'Chưa rõ', fname, content, size: content.length, added: Date.now(), lastOpen: Date.now() };
       try {
         await libPut(bk);
       } catch (e) {
@@ -6673,14 +7123,16 @@
         r.onload = async ev => {
           setStatus('Đang đọc file EPUB…', 0);
           try {
-            const text = await epubFileToText(ev.target.result);
+            const res = await epubFileToText(ev.target.result);
+            const text = (typeof res === 'object' && res.text) ? res.text : (typeof res === 'string' ? res : '');
+            const author = (typeof res === 'object' && res.author) ? res.author : '';
             if (!text.trim()) {
               setStatus('', 0);
               alert('Không đọc được nội dung nào từ file EPUB này (có thể file bị mã hoá DRM hoặc không đúng chuẩn EPUB).');
               return;
             }
             setStatus('', 0);
-            libHandleNewFile(text, f.name.replace(/\.epub$/i, '.txt'));
+            libHandleNewFile(text, f.name.replace(/\.epub$/i, '.txt'), author);
           } catch (err) {
             setStatus('', 0);
             alert('Lỗi khi đọc file EPUB: ' + (err?.message || err));
@@ -6722,6 +7174,13 @@
       if (!opfFile) throw new Error('Không đọc được file .opf: ' + opfPath);
       const opfXml = await opfFile.async('string');
       const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml');
+
+      let epubAuthor = '';
+      try {
+        const creatorEl = opfDoc.querySelector('creator, dc\\:creator');
+        if (creatorEl && creatorEl.textContent) epubAuthor = creatorEl.textContent.trim();
+      } catch(e) {}
+
       // Manifest: id -> {href, mediaType, properties}
       const manifest = {};
       opfDoc.querySelectorAll('manifest > item').forEach(it => {
@@ -6769,7 +7228,7 @@
           blocks.push(heading + '\n\n' + text);
         }
       }
-      return blocks.join('\n\n\n');
+      return { text: blocks.join('\n\n\n'), author: epubAuthor };
     }
     // Build regex nhận diện tiêu đề chương từ chuỗi mẫu người dùng cấu hình (dùng chung cho epub & stripTocBlock)
     function buildChapterRegex(patRaw, flags) {
@@ -6919,6 +7378,7 @@
       updBookmarkBtn();
       renderBkBanner();
       setStatus('');
+      renderHomeLib();
     }
 
     function loadTxt(text, fname, savedTranslations, savedCur, savedTs, savedChapterTitles, savedTranslatedTitles, savedAudited) {
@@ -6955,6 +7415,15 @@
       }
       S.chapters = chs;
       if (!S.chapters.length) { alert('Không tìm thấy chương nào! Thử đổi cài đặt chia chương.'); return; }
+      if (libCurrentId) {
+        libGet(libCurrentId).then(bk => {
+          if (bk) {
+            bk.totalCh = S.chapters.length;
+            if (bk.cur === undefined || bk.cur < 0) bk.cur = S.cur;
+            libPut(bk);
+          }
+        });
+      }
       // Nhận diện chương đã dịch từ trước: splitPat() đã đánh dấu sẵn cờ _xlatedTag cho các chương có
       // thẻ [ Dịch ]/(Dịch)... ở tiêu đề gốc (do downloadFullStory/downloadFullStoryEpub chèn lúc xuất
       // file, hoặc do người dùng/nguồn khác tự gắn) → nội dung chương lúc này CHÍNH LÀ bản dịch, coi bản
